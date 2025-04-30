@@ -8,6 +8,7 @@ int main() {
     window = sfRenderWindow_create(mode, "CSFML works!", sfResize | sfClose, NULL);
     shape = sfCircleShape_create();
     sfCircleShape_setRadius(shape, 100.f);
+    
     sfCircleShape_setFillColor(shape, sfGreen);
 
     while (sfRenderWindow_isOpen(window)) {
