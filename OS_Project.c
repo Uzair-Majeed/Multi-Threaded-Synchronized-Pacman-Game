@@ -6,6 +6,8 @@
 #include <sys/wait.h>
 #include <SFML/Graphics.h>
 #include <stdbool.h>
+#include <time.h>
+
 
 
 #define TILE_SIZE 24
@@ -24,10 +26,10 @@ char grid[ROWS][COLS + 1] = {
     "#......##....##....##......#", // 8
     "######.#####.##.#####.######", // 9
     "     #.#####.##.#####.#     ", // 10
-    "     #.##..........##.#     ", // 11
+    "     #.##...1......##.#     ", // 11
     "     #.##.###__###.##.#     ", // 12
     "######.##.#      #.##.######", // 13
-    "..........# 1  2 #..........", // 14
+    "..........#    2 #..........", // 14
     "######.##.# 3  4 #.##.######", // 15
     "     #.##.########.##.#     ", // 16
     "     #.##..........##.#     ", // 17
@@ -123,7 +125,7 @@ typedef struct {
 } GameState;
 
 
-void renderGraphics();
+void renderGraphics(sfRenderWindow*);
 
 // Global game state (for now — consider passing it by pointer instead)
 GameState gameState;
@@ -210,6 +212,101 @@ void *gameEngineLoop(void *arg) {
     }
 
     sfRenderWindow_destroy(window);
+    sfClock_destroy(clock);
+    return NULL;
+}
+
+void* ghostLogic(void* arg) {
+    int ghostIndex = *(int*)arg;
+    Ghost* ghost = &gameState.ghosts[ghostIndex];
+    float speed = 75.0f; // pixels per second
+    sfClock* clock = sfClock_create();
+
+    while (1) {
+        sfTime elapsed = sfClock_restart(clock);
+        float deltaTime = sfTime_asSeconds(elapsed);
+
+        pthread_mutex_lock(&stateMutex);
+
+        float dx = 0, dy = 0;
+        switch (ghost->direction) {
+            case UP: dy = -speed * deltaTime; break;
+            case DOWN: dy = speed * deltaTime; break;
+            case LEFT: dx = -speed * deltaTime; break;
+            case RIGHT: dx = speed * deltaTime; break;
+            default: break;
+        }
+
+        float newX = ghost->pos.x + dx;
+        float newY = ghost->pos.y + dy;
+        int gridX = (int)(newX) / TILE_SIZE;
+        int gridY = ((int)(newY - 100)) / TILE_SIZE;
+
+        if (gridY >= 0 && gridY < ROWS && gridX >= 0 && gridX < COLS && grid[gridY][gridX] != '#') {
+            ghost->pos.x = newX;
+            ghost->pos.y = newY;
+        } else {
+            // Pick a random new direction
+            ghost->direction = rand() % 4;
+        }
+
+        pthread_mutex_unlock(&stateMutex);
+
+        usleep(1000000 / 60); // 60 FPS
+    }
+
+    sfClock_destroy(clock);
+    return NULL;
+}
+
+void* ghostThread(void* arg) {
+    int id = *(int*)arg;
+    Ghost* ghost = &gameState.ghosts[id];
+    sfClock* clock = sfClock_create();
+    float speed = 80.0f; // pixels per second
+
+    while (1) {
+        sfTime elapsed = sfClock_restart(clock);
+        float dt = sfTime_asSeconds(elapsed);
+
+        pthread_mutex_lock(&stateMutex);
+
+        // Calculate next direction if needed (random for now)
+        if (rand() % 100 < 20) { // change direction sometimes
+            enum Direction directions[4] = {UP, DOWN, LEFT, RIGHT};
+            ghost->direction = directions[rand() % 4];
+        }
+
+        // Proposed movement
+        float dx = 0, dy = 0;
+        switch (ghost->direction) {
+            case UP:    dy = -speed * dt; break;
+            case DOWN:  dy =  speed * dt; break;
+            case LEFT:  dx = -speed * dt; break;
+            case RIGHT: dx =  speed * dt; break;
+            default: break;
+        }
+
+        float newX = ghost->pos.x + dx;
+        float newY = ghost->pos.y + dy;
+        int gridX = (int)(newX) / TILE_SIZE;
+        int gridY = ((int)(newY - 100)) / TILE_SIZE;
+
+        // Stay inside bounds and avoid walls
+        if (gridY >= 0 && gridY < ROWS && gridX >= 0 && gridX < COLS && grid[gridY][gridX] != '#') {
+            ghost->pos.x = newX;
+            ghost->pos.y = newY;
+        } else {
+            // Hit a wall — choose a new direction
+            enum Direction directions[4] = {UP, DOWN, LEFT, RIGHT};
+            ghost->direction = directions[rand() % 4];
+        }
+
+        pthread_mutex_unlock(&stateMutex);
+
+        usleep(1000000 / 60); 
+    }
+
     sfClock_destroy(clock);
     return NULL;
 }
@@ -406,17 +503,30 @@ void initializeGame(){
 }
 
 int main() {
-
-
     pthread_t GameEngineThread;
-    pthread_t UIThread;
     pthread_t GhostThread[4];
 
     initializeGame();
-    pthread_create(&GameEngineThread,NULL,gameEngineLoop, NULL);
 
-    pthread_join(GameEngineThread,NULL);
+    pthread_create(&GameEngineThread, NULL, gameEngineLoop, NULL);
 
+    srand(time(NULL)); // Seed RNG
+
+    int ghostIndices[4] = {0, 1, 2, 3};
+
+    for (int i = 0; i < 4; i++) {
+        pthread_create(&GhostThread[i], NULL, ghostLogic, &ghostIndices[i]);
+    }
+
+
+    pthread_join(GameEngineThread, NULL);
+
+    for (int i = 0; i < 4; ++i) {
+        pthread_cancel(GhostThread[i]); // optionally clean up
+    }
+    for (int i = 0; i < 4; i++) {
+        pthread_join(GhostThread[i], NULL);
+    }
 
     return 0;
 }
