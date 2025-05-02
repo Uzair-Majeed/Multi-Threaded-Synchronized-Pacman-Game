@@ -125,191 +125,99 @@ typedef struct {
 } GameState;
 
 
-void renderGraphics(sfRenderWindow*);
+enum UIStateType{
+    STATE_MAIN_MENU,
+    STATE_RUNNING,
+    STATE_PAUSED,
+    STATE_GAME_OVER,
+    STATE_HIGHSCORE,
+    STATE_INSTRUCTIONS
+};
 
-// Global game state (for now — consider passing it by pointer instead)
+typedef struct {
+    enum UIStateType currentState;
+    bool quit;
+    int score;
+    int lives;
+} UIState;
+
+UIState uiState;
+
+pthread_mutex_t uiMutex = PTHREAD_MUTEX_INITIALIZER;
+
 GameState gameState;
 
-
-// Optional: mutex for shared state (if multiple threads interact)
 pthread_mutex_t stateMutex = PTHREAD_MUTEX_INITIALIZER;
 
-void *gameEngineLoop(void *arg) {
 
-
-    sfRenderWindow* window;
-    sfVideoMode mode = {672, 864, 32};
-
-
-    window = sfRenderWindow_create(mode, "PACMAN", sfResize | sfClose, NULL);
-
-    sfClock* clock = sfClock_create();
-    float pacmanSpeed = 100.0f; // pixels per second
-
-    // Find initial Pacman position from grid
-    for (int row = 0; row < ROWS; row++) {
-        for (int col = 0; col < COLS; col++) {
-            if (grid[row][col] == 'P') {
-                sfVector2f temp = {col * TILE_SIZE,row * TILE_SIZE + 100};
-                gameState.pacman.pos = temp;
-                gameState.pacman.direction = NONE;
-                break;
-            }
-        }
-    }
-
-    while (sfRenderWindow_isOpen(window))
-    {
-        sfTime elapsed = sfClock_restart(clock);
-        float deltaTime = sfTime_asSeconds(elapsed);
-
-        // Lock shared state if needed
-        pthread_mutex_lock(&stateMutex);
-
-        // Example: move Pacman
-        float dx = 0, dy = 0;
-        switch (gameState.pacman.direction) {
-            case UP:    dy = -pacmanSpeed * deltaTime; break;
-            case DOWN:  dy =  pacmanSpeed * deltaTime; break;
-            case LEFT:  dx = -pacmanSpeed * deltaTime; break;
-            case RIGHT: dx =  pacmanSpeed * deltaTime; break;
-            default: break;
-        }
-        //pacman mouth movement
-        static float mouthTimer = 0.0f;
-        const float mouthInterval = 0.25f; // seconds
-    
-        mouthTimer += deltaTime;
-        if (mouthTimer >= mouthInterval) {
-            mouthTimer = 0.0f;
-    
-            if (gameState.pacman.mouth == OPEN)
-                gameState.pacman.mouth = HALF_OPEN;
-            else if (gameState.pacman.mouth == HALF_OPEN)
-                gameState.pacman.mouth = CLOSED;
-            else
-                gameState.pacman.mouth = OPEN;
-        }
-
-
-        // Check for wall collisions before applying movement
-        float newX = gameState.pacman.pos.x + dx;
-        float newY = gameState.pacman.pos.y + dy;
-
-        int gridX = (int)(newX) / TILE_SIZE;
-        int gridY = ((int)(newY - 100)) / TILE_SIZE; // adjust for offset
-
-        if (gridY >= 0 && gridY < ROWS && gridX >= 0 && gridX < COLS && grid[gridY][gridX] != '#') {
-            gameState.pacman.pos.x = newX;
-            gameState.pacman.pos.y = newY;
-        }
-
-        renderGraphics(window);
-        pthread_mutex_unlock(&stateMutex);
-
-        // Cap to ~60 FPS
-        usleep(1000000 / 60);
-    }
-
-    sfRenderWindow_destroy(window);
-    sfClock_destroy(clock);
-    return NULL;
+// Renders the Main Menu screen
+void renderMainMenu(sfRenderWindow *window, sfFont *font) {
+    sfText *title = sfText_create();
+    sfText_setString(title,
+        "PAC-MAN \n\n\n\n"
+        "Press Enter to Play\n\n\n\n"
+        "Press I for Instructions\n\n\n\n"
+        "Press H for High Score\n\n\n\n"
+        "Press ESC to Exit");
+    sfText_setFont(title, font);
+    sfText_setColor(title,sfYellow);
+    sfText_setCharacterSize(title, 25);
+    sfText_setPosition(title, (sfVector2f){100.f, 150.f});
+    sfRenderWindow_drawText(window, title, NULL);
+    sfText_destroy(title);
 }
 
-void* ghostLogic(void* arg) {
-    int ghostIndex = *(int*)arg;
-    Ghost* ghost = &gameState.ghosts[ghostIndex];
-    float speed = 75.0f; // pixels per second
-    sfClock* clock = sfClock_create();
-
-    while (1) {
-        sfTime elapsed = sfClock_restart(clock);
-        float deltaTime = sfTime_asSeconds(elapsed);
-
-        pthread_mutex_lock(&stateMutex);
-
-        float dx = 0, dy = 0;
-        switch (ghost->direction) {
-            case UP: dy = -speed * deltaTime; break;
-            case DOWN: dy = speed * deltaTime; break;
-            case LEFT: dx = -speed * deltaTime; break;
-            case RIGHT: dx = speed * deltaTime; break;
-            default: break;
-        }
-
-        float newX = ghost->pos.x + dx;
-        float newY = ghost->pos.y + dy;
-        int gridX = (int)(newX) / TILE_SIZE;
-        int gridY = ((int)(newY - 100)) / TILE_SIZE;
-
-        if (gridY >= 0 && gridY < ROWS && gridX >= 0 && gridX < COLS && grid[gridY][gridX] != '#') {
-            ghost->pos.x = newX;
-            ghost->pos.y = newY;
-        } else {
-            // Pick a random new direction
-            ghost->direction = rand() % 4;
-        }
-
-        pthread_mutex_unlock(&stateMutex);
-
-        usleep(1000000 / 60); // 60 FPS
-    }
-
-    sfClock_destroy(clock);
-    return NULL;
+// Renders the Pause Menu screen
+void renderPauseMenu(sfRenderWindow *window, sfFont *font) {
+    sfText *pauseText = sfText_create();
+    sfText_setString(pauseText,
+        "GAME PAUSED\n\n\n\n"
+        "Press Enter to Resume\n\n\n\n"
+        "Press M to Go To Main Menu\n\n\n\n"
+        "Press ESC to Exit");
+    sfText_setFont(pauseText, font);
+    sfText_setColor(pauseText,sfYellow);
+    sfText_setCharacterSize(pauseText, 25);
+    sfText_setPosition(pauseText, (sfVector2f){100.f, 150.f});
+    sfRenderWindow_drawText(window, pauseText, NULL);
+    sfText_destroy(pauseText);
 }
 
-void* ghostThread(void* arg) {
-    int id = *(int*)arg;
-    Ghost* ghost = &gameState.ghosts[id];
-    sfClock* clock = sfClock_create();
-    float speed = 80.0f; // pixels per second
+// Renders the High Score screen
+void renderHighScore(sfRenderWindow *window, sfFont *font, int highScore) {
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer),
+        "HIGH SCORE: %d\\n\n\n\n"
+        "Press ENTER to return to Menu", highScore);
 
-    while (1) {
-        sfTime elapsed = sfClock_restart(clock);
-        float dt = sfTime_asSeconds(elapsed);
-
-        pthread_mutex_lock(&stateMutex);
-
-        // Calculate next direction if needed (random for now)
-        if (rand() % 100 < 20) { // change direction sometimes
-            enum Direction directions[4] = {UP, DOWN, LEFT, RIGHT};
-            ghost->direction = directions[rand() % 4];
-        }
-
-        // Proposed movement
-        float dx = 0, dy = 0;
-        switch (ghost->direction) {
-            case UP:    dy = -speed * dt; break;
-            case DOWN:  dy =  speed * dt; break;
-            case LEFT:  dx = -speed * dt; break;
-            case RIGHT: dx =  speed * dt; break;
-            default: break;
-        }
-
-        float newX = ghost->pos.x + dx;
-        float newY = ghost->pos.y + dy;
-        int gridX = (int)(newX) / TILE_SIZE;
-        int gridY = ((int)(newY - 100)) / TILE_SIZE;
-
-        // Stay inside bounds and avoid walls
-        if (gridY >= 0 && gridY < ROWS && gridX >= 0 && gridX < COLS && grid[gridY][gridX] != '#') {
-            ghost->pos.x = newX;
-            ghost->pos.y = newY;
-        } else {
-            // Hit a wall — choose a new direction
-            enum Direction directions[4] = {UP, DOWN, LEFT, RIGHT};
-            ghost->direction = directions[rand() % 4];
-        }
-
-        pthread_mutex_unlock(&stateMutex);
-
-        usleep(1000000 / 60); 
-    }
-
-    sfClock_destroy(clock);
-    return NULL;
+    sfText *scoreText = sfText_create();
+    sfText_setString(scoreText, buffer);
+    sfText_setColor(scoreText,sfYellow);
+    sfText_setFont(scoreText, font);
+    sfText_setCharacterSize(scoreText, 25);
+    sfText_setPosition(scoreText, (sfVector2f){100.f, 150.f});
+    sfRenderWindow_drawText(window, scoreText, NULL);
+    sfText_destroy(scoreText);
 }
+
+// Renders the Instructions screen
+void renderInstructions(sfRenderWindow *window, sfFont *font) {
+    sfText *instructions = sfText_create();
+    sfText_setString(instructions,
+        "Instructions\n\n\n"
+        "-Use Arrow Keys to Move\n\n"
+        "-Avoid Ghosts\n\n"
+        "-Eat all the pellets to win!\n\n\n"
+        "Press Enter to Return to Menu\n\n"
+        "Press ESC to Exit");
+    sfText_setFont(instructions, font);
+    sfText_setColor(instructions, sfYellow);
+    sfText_setCharacterSize(instructions, 25);
+    sfText_setPosition(instructions, (sfVector2f){50.f, 100.f});
+    sfRenderWindow_drawText(window, instructions, NULL);
+    sfText_destroy(instructions);
+}
+
 
 
 
@@ -467,6 +375,327 @@ void renderGraphics(sfRenderWindow * window){
 
 
 }
+void handleUIState(sfRenderWindow* window, sfFont* font) {
+    pthread_mutex_lock(&uiMutex);
+
+    if (uiState.quit) {
+        sfRenderWindow_close(window);
+        pthread_mutex_unlock(&uiMutex);
+        return;
+    }
+
+    switch (uiState.currentState) {
+        case STATE_MAIN_MENU:
+            sfRenderWindow_clear(window, sfBlack);
+            renderMainMenu(window, font);
+            sfRenderWindow_display(window);
+            break;
+
+        case STATE_PAUSED:
+            sfRenderWindow_clear(window, sfBlack);
+            renderPauseMenu(window, font);
+            sfRenderWindow_display(window);
+            break;
+
+        case STATE_GAME_OVER:
+            sfRenderWindow_clear(window, sfBlack);
+            renderHighScore(window, font,uiState.score); 
+            sfRenderWindow_display(window);
+            break;
+
+        case STATE_HIGHSCORE:
+            sfRenderWindow_clear(window, sfBlack);
+            renderHighScore(window, font, uiState.score);
+            sfRenderWindow_display(window);
+            break;
+
+        case STATE_INSTRUCTIONS:
+            sfRenderWindow_clear(window, sfBlack);
+            renderInstructions(window, font);
+            sfRenderWindow_display(window);
+            break;
+
+        default:
+            break;
+    }
+
+    pthread_mutex_unlock(&uiMutex);
+}
+
+void handleInput(sfRenderWindow *window) {
+    sfEvent event;
+    
+    while (sfRenderWindow_pollEvent(window, &event)) {
+        if (event.type == sfEvtKeyPressed) {
+            pthread_mutex_lock(&uiMutex); 
+
+            switch (uiState.currentState) {
+                case STATE_MAIN_MENU:
+                    if (event.key.code == sfKeyEnter) {
+                        uiState.currentState = STATE_RUNNING;
+                    } else if (event.key.code == sfKeyEscape) {
+                        uiState.quit = true;
+                    } else if (event.key.code == sfKeyH) {
+                        uiState.currentState = STATE_HIGHSCORE;
+                    } else if (event.key.code == sfKeyI) {
+                        uiState.currentState = STATE_INSTRUCTIONS;
+                    }
+                    break;
+
+                case STATE_RUNNING:
+                    if (event.key.code == sfKeyEscape) {
+                        uiState.currentState = STATE_PAUSED;
+                    } else if (event.key.code == sfKeyUp) {
+                        if (gameState.pacman.direction != DOWN) {
+                            gameState.pacman.direction = UP;
+                        }
+                    } else if (event.key.code == sfKeyDown) {
+                        if (gameState.pacman.direction != UP) {
+                            gameState.pacman.direction = DOWN;
+                        }
+                    } else if (event.key.code == sfKeyLeft) {
+                        if (gameState.pacman.direction != RIGHT) {
+                            gameState.pacman.direction = LEFT;
+                        }
+                    } else if (event.key.code == sfKeyRight) {
+                        if (gameState.pacman.direction != LEFT) {
+                            gameState.pacman.direction = RIGHT;
+                        }
+                    }
+                    break;
+
+                case STATE_PAUSED:
+                    if (event.key.code == sfKeyEnter) {
+                        uiState.currentState = STATE_RUNNING;
+                    }else if (event.key.code == sfKeyM) {
+                        uiState.currentState = STATE_MAIN_MENU;
+                    } else if (event.key.code == sfKeyEscape) {
+                        uiState.quit = true;
+                    }
+                    break;
+
+                case STATE_GAME_OVER:
+                    if (event.key.code == sfKeyEnter) {
+                        uiState.currentState = STATE_MAIN_MENU;
+                    } else if (event.key.code == sfKeyEscape) {
+                        uiState.quit = true;
+                    }
+                    break;
+
+                case STATE_HIGHSCORE:
+                    if (event.key.code == sfKeyEnter) {
+                    uiState.currentState = STATE_MAIN_MENU;
+                    }
+                    break;
+                case STATE_INSTRUCTIONS:
+                    if (event.key.code == sfKeyEnter) {
+                        uiState.currentState = STATE_MAIN_MENU;
+                    }
+                    break;
+
+                default:
+                    break;
+            }
+
+            pthread_mutex_unlock(&uiMutex); 
+        }
+    }
+}
+
+
+
+void *gameEngineLoop(void *arg) {
+
+
+    sfRenderWindow* window;
+
+    sfVideoMode mode = {672, 864, 32};
+    window = sfRenderWindow_create(mode, "PACMAN", sfResize | sfClose, NULL);
+
+
+    sfFont* font = sfFont_createFromFile("PAC-FONT.TTF");
+    sfClock* clock = sfClock_create();
+    float pacmanSpeed = 100.0f;
+
+    // Set initial position of Pacman
+    for (int row = 0; row < ROWS; row++) {
+        for (int col = 0; col < COLS; col++) {
+            if (grid[row][col] == 'P') {
+                sfVector2f temp = {col * TILE_SIZE, row * TILE_SIZE + 100};
+                gameState.pacman.pos = temp;
+                gameState.pacman.direction = NONE;
+                break;
+            }
+        }
+    }
+
+    while (sfRenderWindow_isOpen(window)) {
+        handleInput(window);
+        handleUIState(window, font);  
+
+        pthread_mutex_lock(&uiMutex);
+            bool flag = (uiState.currentState == STATE_RUNNING);
+        pthread_mutex_unlock(&uiMutex);
+
+        if(!flag){
+            continue;
+        }
+
+
+        sfTime elapsed = sfClock_restart(clock);
+        float deltaTime = sfTime_asSeconds(elapsed);
+
+        pthread_mutex_lock(&stateMutex);
+
+        float dx = 0, dy = 0;
+        switch (gameState.pacman.direction) {
+            case UP:    dy = -pacmanSpeed * deltaTime; break;
+            case DOWN:  dy =  pacmanSpeed * deltaTime; break;
+            case LEFT:  dx = -pacmanSpeed * deltaTime; break;
+            case RIGHT: dx =  pacmanSpeed * deltaTime; break;
+            default: break;
+        }
+
+        static float mouthTimer = 0.0f;
+        const float mouthInterval = 0.25f;
+        mouthTimer += deltaTime;
+
+        if (mouthTimer >= mouthInterval) {
+            mouthTimer = 0.0f;
+            gameState.pacman.mouth = (gameState.pacman.mouth + 1) % 3;
+        }
+
+        float newX = gameState.pacman.pos.x + dx;
+        float newY = gameState.pacman.pos.y + dy;
+        int gridX = (int)(newX) / TILE_SIZE;
+        int gridY = ((int)(newY - 100)) / TILE_SIZE;
+
+        if (gridY >= 0 && gridY < ROWS && gridX >= 0 && gridX < COLS && grid[gridY][gridX] != '#') {
+            gameState.pacman.pos.x = newX;
+            gameState.pacman.pos.y = newY;
+        }
+
+        renderGraphics(window);
+        pthread_mutex_unlock(&stateMutex);
+
+        usleep(1000000 / 60);  // ~60 FPS
+    }
+
+    sfClock_destroy(clock);
+    sfFont_destroy(font);
+    sfRenderWindow_destroy(window);
+    return NULL;
+}
+
+
+void *UIFunction(void *arg) {
+
+    //sfRenderWindow* window = (sfRenderWindow*)arg;
+    //sfEvent event;
+    //sfBool prevEnter = sfFalse;
+    //sfBool prevP = sfFalse;
+
+    
+
+    return NULL;
+}
+
+
+void* ghostLogic(void* arg) {
+    int ghostIndex = *(int*)arg;
+    Ghost* ghost = &gameState.ghosts[ghostIndex];
+    float speed = 75.0f; // pixels per second
+    sfClock* clock = sfClock_create();
+
+    while (1) {
+        sfTime elapsed = sfClock_restart(clock);
+        float deltaTime = sfTime_asSeconds(elapsed);
+
+        pthread_mutex_lock(&stateMutex);
+
+        float dx = 0, dy = 0;
+        switch (ghost->direction) {
+            case UP: dy = -speed * deltaTime; break;
+            case DOWN: dy = speed * deltaTime; break;
+            case LEFT: dx = -speed * deltaTime; break;
+            case RIGHT: dx = speed * deltaTime; break;
+            default: break;
+        }
+
+        float newX = ghost->pos.x + dx;
+        float newY = ghost->pos.y + dy;
+        int gridX = (int)(newX) / TILE_SIZE;
+        int gridY = ((int)(newY - 100)) / TILE_SIZE;
+
+        if (gridY >= 0 && gridY < ROWS && gridX >= 0 && gridX < COLS && grid[gridY][gridX] != '#') {
+            ghost->pos.x = newX;
+            ghost->pos.y = newY;
+        } else {
+            // Pick a random new direction
+            ghost->direction = rand() % 4;
+        }
+
+        pthread_mutex_unlock(&stateMutex);
+
+        usleep(1000000 / 60); // 60 FPS
+    }
+
+    sfClock_destroy(clock);
+    return NULL;
+}
+
+void* ghostThread(void* arg) {
+    int id = *(int*)arg;
+    Ghost* ghost = &gameState.ghosts[id];
+    sfClock* clock = sfClock_create();
+    float speed = 80.0f; // pixels per second
+
+    while (1) {
+        sfTime elapsed = sfClock_restart(clock);
+        float dt = sfTime_asSeconds(elapsed);
+
+        pthread_mutex_lock(&stateMutex);
+
+        // Calculate next direction if needed (random for now)
+        if (rand() % 100 < 20) { // change direction sometimes
+            enum Direction directions[4] = {UP, DOWN, LEFT, RIGHT};
+            ghost->direction = directions[rand() % 4];
+        }
+
+        // Proposed movement
+        float dx = 0, dy = 0;
+        switch (ghost->direction) {
+            case UP:    dy = -speed * dt; break;
+            case DOWN:  dy =  speed * dt; break;
+            case LEFT:  dx = -speed * dt; break;
+            case RIGHT: dx =  speed * dt; break;
+            default: break;
+        }
+
+        float newX = ghost->pos.x + dx;
+        float newY = ghost->pos.y + dy;
+        int gridX = (int)(newX) / TILE_SIZE;
+        int gridY = ((int)(newY - 100)) / TILE_SIZE;
+
+        // Stay inside bounds and avoid walls
+        if (gridY >= 0 && gridY < ROWS && gridX >= 0 && gridX < COLS && grid[gridY][gridX] != '#') {
+            ghost->pos.x = newX;
+            ghost->pos.y = newY;
+        } else {
+            // Hit a wall — choose a new direction
+            enum Direction directions[4] = {UP, DOWN, LEFT, RIGHT};
+            ghost->direction = directions[rand() % 4];
+        }
+
+        pthread_mutex_unlock(&stateMutex);
+
+        usleep(1000000 / 60); 
+    }
+
+    sfClock_destroy(clock);
+    return NULL;
+}
+
 
 
 void initializeGame(){
@@ -499,17 +728,22 @@ void initializeGame(){
     }
 
     gameState.pacman.mouth = OPEN;
+    uiState.currentState = STATE_MAIN_MENU;
 
 }
 
 int main() {
     pthread_t GameEngineThread;
     pthread_t GhostThread[4];
+    pthread_t UIThread;
+
 
     initializeGame();
 
-    pthread_create(&GameEngineThread, NULL, gameEngineLoop, NULL);
+    pthread_create(&GameEngineThread, NULL, gameEngineLoop,NULL);
 
+    
+    pthread_create(&UIThread, NULL, UIFunction,NULL);
     srand(time(NULL)); // Seed RNG
 
     int ghostIndices[4] = {0, 1, 2, 3};
@@ -518,8 +752,9 @@ int main() {
         pthread_create(&GhostThread[i], NULL, ghostLogic, &ghostIndices[i]);
     }
 
-
     pthread_join(GameEngineThread, NULL);
+
+    pthread_join(UIThread,NULL);
 
     for (int i = 0; i < 4; ++i) {
         pthread_cancel(GhostThread[i]); // optionally clean up
