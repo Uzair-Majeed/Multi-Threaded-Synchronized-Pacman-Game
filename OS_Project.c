@@ -7,14 +7,23 @@
 #include <SFML/Graphics.h>
 #include <stdbool.h>
 #include <time.h>
-
+#include <limits.h>
 
 
 #define TILE_SIZE 24
 #define ROWS 31
 #define COLS 28
 
-char grid[ROWS][COLS + 1] = {
+#define MAX_QUEUE  (ROWS * COLS) //for queue size in BFS algorithm
+
+// A small struct for BFS queue
+typedef struct {
+    int r;
+    int c;
+} Node;
+
+
+char grid[ROWS][COLS] = {
     "############################", // 0
     "#............##..........O.#", // 1
     "#.####.#####.##.#####.####.#", // 2
@@ -26,10 +35,10 @@ char grid[ROWS][COLS + 1] = {
     "#......##....##....##......#", // 8
     "######.#####.##.#####.######", // 9
     "     #.#####.##.#####.#     ", // 10
-    "     #.##...1......##.#     ", // 11
+    "     #.##..........##.#     ", // 11
     "     #.##.###__###.##.#     ", // 12
     "######.##.#      #.##.######", // 13
-    "..........#    2 #..........", // 14
+    "..........# 1  2 #..........", // 14
     "######.##.# 3  4 #.##.######", // 15
     "     #.##.########.##.#     ", // 16
     "     #.##..........##.#     ", // 17
@@ -102,6 +111,7 @@ enum State
 };
 
 typedef struct {
+
     sfVector2f pos;
     enum Direction direction;
     int lives;
@@ -113,6 +123,8 @@ typedef struct {
     enum Direction direction;
     enum GhostType color; // Optional
     enum TargetState state; // or other states
+    bool hasExited;
+    bool hasKey;
 } Ghost;
 
 typedef struct {
@@ -219,7 +231,29 @@ void renderInstructions(sfRenderWindow *window, sfFont *font) {
 }
 
 
+void renderScore(){
 
+}
+
+void renderHeart(){
+
+}
+
+void renderGrid(){
+
+}
+
+void renderPacman(){
+
+}
+
+void renderGhosts(){
+
+}
+
+void renderPellets(){
+    
+}
 
 void renderGraphics(sfRenderWindow * window){
 
@@ -263,10 +297,23 @@ void renderGraphics(sfRenderWindow * window){
     
     sfSprite_setTexture(pac,pacTexture,sfTrue);
     sfSprite_setPosition(pac,gameState.pacman.pos);
-    if(gameState.pacman.direction == UP)sfSprite_setRotation(pac,90.0f);
-    else if(gameState.pacman.direction == DOWN)sfSprite_setRotation(pac,-90.0f);
-    else if(gameState.pacman.direction == LEFT)sfSprite_setRotation(pac,180.0f);
-    else if(gameState.pacman.direction == RIGHT)sfSprite_setRotation(pac,0.0f);
+    switch (gameState.pacman.direction) {
+        case UP:
+            sfSprite_setRotation(pac, 270.0f); // up is 270°
+            break;
+        case DOWN:
+            sfSprite_setRotation(pac, 90.0f);  // down is 90°
+            break;
+        case LEFT:
+            sfSprite_setRotation(pac, 180.0f); // left is 180°
+            break;
+        case RIGHT:
+            sfSprite_setRotation(pac, 0.0f);   // right is 0°
+            break;
+        default:
+            // Optionally handle invalid direction
+            break;
+    }
     
 
     //ghosts
@@ -346,7 +393,7 @@ void renderGraphics(sfRenderWindow * window){
     
                 }
                 if(grid[i][j] == 'O'){
-                    sfVector2f temp = {j * TILE_SIZE + 10,i* TILE_SIZE + 110};
+                    sfVector2f temp = {j * TILE_SIZE + 10,i* TILE_SIZE + 90};
                     sfVector2f scale3 = {1.5f,1.5f};
                     sfSprite_setScale(bigpelletSpr,scale3);
                     sfSprite_setPosition(bigpelletSpr,temp);
@@ -503,6 +550,54 @@ void handleInput(sfRenderWindow *window) {
 }
 
 
+void initPacman(){
+
+
+    // Set initial position of Pacman
+    for (int row = 0; row < ROWS; row++) {
+        for (int col = 0; col < COLS; col++) {
+            if (grid[row][col] == 'P') {
+                sfVector2f temp = {col * TILE_SIZE , row * TILE_SIZE + 120};
+                gameState.pacman.pos = temp;
+                gameState.pacman.direction = NONE;
+                break;
+            }
+        }
+    }
+
+}
+
+void movePacman(float pacmanSpeed,float deltaTime){
+
+    float dx = 0, dy = 0;
+    switch (gameState.pacman.direction) {
+        case UP:    dy = -pacmanSpeed * deltaTime; break;
+        case DOWN:  dy =  pacmanSpeed * deltaTime; break;
+        case LEFT:  dx = -pacmanSpeed * deltaTime; break;
+        case RIGHT: dx =  pacmanSpeed * deltaTime; break;
+        default: break;
+    }
+
+    static float mouthTimer = 0.0f;
+    const float mouthInterval = 0.25f;
+    mouthTimer += deltaTime;
+
+    if (mouthTimer >= mouthInterval) {
+        mouthTimer = 0.0f;
+        gameState.pacman.mouth = (gameState.pacman.mouth + 1) % 3;
+    }
+
+    float newX = gameState.pacman.pos.x + dx;
+    float newY = gameState.pacman.pos.y + dy;
+    int gridX = (int)(newX) / TILE_SIZE;
+    int gridY = ((int)(newY - 120)) / TILE_SIZE;
+
+    if (gridY >= 0 && gridY < ROWS && gridX >= 0 && gridX < COLS && grid[gridY][gridX] != '#') {
+        gameState.pacman.pos.x = newX;
+        gameState.pacman.pos.y = newY;
+    }
+}
+
 
 void *gameEngineLoop(void *arg) {
 
@@ -517,17 +612,7 @@ void *gameEngineLoop(void *arg) {
     sfClock* clock = sfClock_create();
     float pacmanSpeed = 100.0f;
 
-    // Set initial position of Pacman
-    for (int row = 0; row < ROWS; row++) {
-        for (int col = 0; col < COLS; col++) {
-            if (grid[row][col] == 'P') {
-                sfVector2f temp = {col * TILE_SIZE, row * TILE_SIZE + 100};
-                gameState.pacman.pos = temp;
-                gameState.pacman.direction = NONE;
-                break;
-            }
-        }
-    }
+    
 
     while (sfRenderWindow_isOpen(window)) {
         handleInput(window);
@@ -547,33 +632,7 @@ void *gameEngineLoop(void *arg) {
 
         pthread_mutex_lock(&stateMutex);
 
-        float dx = 0, dy = 0;
-        switch (gameState.pacman.direction) {
-            case UP:    dy = -pacmanSpeed * deltaTime; break;
-            case DOWN:  dy =  pacmanSpeed * deltaTime; break;
-            case LEFT:  dx = -pacmanSpeed * deltaTime; break;
-            case RIGHT: dx =  pacmanSpeed * deltaTime; break;
-            default: break;
-        }
-
-        static float mouthTimer = 0.0f;
-        const float mouthInterval = 0.25f;
-        mouthTimer += deltaTime;
-
-        if (mouthTimer >= mouthInterval) {
-            mouthTimer = 0.0f;
-            gameState.pacman.mouth = (gameState.pacman.mouth + 1) % 3;
-        }
-
-        float newX = gameState.pacman.pos.x + dx;
-        float newY = gameState.pacman.pos.y + dy;
-        int gridX = (int)(newX) / TILE_SIZE;
-        int gridY = ((int)(newY - 100)) / TILE_SIZE;
-
-        if (gridY >= 0 && gridY < ROWS && gridX >= 0 && gridX < COLS && grid[gridY][gridX] != '#') {
-            gameState.pacman.pos.x = newX;
-            gameState.pacman.pos.y = newY;
-        }
+        movePacman(pacmanSpeed,deltaTime);
 
         renderGraphics(window);
         pthread_mutex_unlock(&stateMutex);
@@ -601,95 +660,239 @@ void *UIFunction(void *arg) {
 }
 
 
-void* ghostLogic(void* arg) {
+/*
+void* GhostThread_func(void* arg) {
     int ghostIndex = *(int*)arg;
     Ghost* ghost = &gameState.ghosts[ghostIndex];
     float speed = 75.0f; // pixels per second
     sfClock* clock = sfClock_create();
 
     while (1) {
-        sfTime elapsed = sfClock_restart(clock);
-        float deltaTime = sfTime_asSeconds(elapsed);
+        float deltaTime = sfTime_asSeconds(sfClock_restart(clock));
 
-        pthread_mutex_lock(&stateMutex);
+        // Step 1: Ensure ghost exits house only once
+        if (!ghost->hasExited) {
+            printf("Ghost %d: waiting for key...\n", ghostIndex);
+            sem_wait(&keySemaphore);
+            printf("Ghost %d: acquired key.\n", ghostIndex);
+        
+            printf("Ghost %d: waiting for exit permit...\n", ghostIndex);
+            sem_wait(&exitPermitSemaphore);
+            printf("Ghost %d: acquired exit permit.\n", ghostIndex);
+        
+            pthread_mutex_lock(&resourceMutex);
+            ghost->hasExited = 1;
+            ghost->pos.y -= TILE_SIZE * 2;
+            
+            printf("Ghost %d: exited ghost house at (%.1f, %.1f).\n", ghostIndex, ghost->pos.x, ghost->pos.y);
+            sem_post(&keySemaphore);          // release key
+            sem_post(&exitPermitSemaphore); 
+            pthread_mutex_unlock(&resourceMutex);
+        }
+        
 
-        float dx = 0, dy = 0;
-        switch (ghost->direction) {
-            case UP: dy = -speed * deltaTime; break;
-            case DOWN: dy = speed * deltaTime; break;
-            case LEFT: dx = -speed * deltaTime; break;
-            case RIGHT: dx = speed * deltaTime; break;
-            default: break;
+        if (ghost->hasExited) {
+            float dx = 0, dy = 0;
+            switch (ghost->direction) {
+                case UP: dy = -speed * deltaTime; break;
+                case DOWN: dy = speed * deltaTime; break;
+                case LEFT: dx = -speed * deltaTime; break;
+                case RIGHT: dx = speed * deltaTime; break;
+            }
+        
+            float newX = ghost->pos.x + dx;
+            float newY = ghost->pos.y + dy;
+        
+            int gridX = (int)(newX) / TILE_SIZE;
+            int gridY = ((int)(newY - 100)) / TILE_SIZE;
+        
+            if (gridY >= 0 && gridY < ROWS && gridX >= 0 && gridX < COLS && grid[gridY][gridX] != '#') {
+                ghost->pos.x = newX;
+                ghost->pos.y = newY;
+            } else {
+                ghost->direction = rand() % 4;
+            }
         }
 
-        float newX = ghost->pos.x + dx;
-        float newY = ghost->pos.y + dy;
-        int gridX = (int)(newX) / TILE_SIZE;
-        int gridY = ((int)(newY - 100)) / TILE_SIZE;
-
-        if (gridY >= 0 && gridY < ROWS && gridX >= 0 && gridX < COLS && grid[gridY][gridX] != '#') {
-            ghost->pos.x = newX;
-            ghost->pos.y = newY;
-        } else {
-            // Pick a random new direction
-            ghost->direction = rand() % 4;
-        }
-
-        pthread_mutex_unlock(&stateMutex);
-
-        usleep(1000000 / 60); // 60 FPS
+        usleep(1000000 / 60); // ~60 FPS
     }
+    printf("Ghost %d position: (%.2f, %.2f)\n", ghostIndex, ghost->pos.x, ghost->pos.y);
 
     sfClock_destroy(clock);
     return NULL;
 }
+*/
+// Direction offsets: UP, DOWN, LEFT, RIGHT
+static const int rowOffset[4] = { -1, 1,  0, 0 };
+static const int colOffset[4] = {  0, 0, -1, 1 };
 
-void* ghostThread(void* arg) {
-    int id = *(int*)arg;
-    Ghost* ghost = &gameState.ghosts[id];
+sem_t keySemaphore;
+sem_t exitPermitSemaphore;
+pthread_mutex_t resourceMutex = PTHREAD_MUTEX_INITIALIZER;
+
+// Helper to find entity (like ghost '1', '2'... or 'P' for Pac-Man) in the grid
+
+Node findEntityInGrid(char target) {
+    for (int row = 0; row < ROWS; row++) {
+        for (int col = 0; col < COLS; col++) {
+            if (grid[row][col] == target) {
+                return (Node){row, col};
+            }
+        }
+    }
+    return (Node){-1, -1}; // Entity not found
+}
+
+void* GhostThreadFunction(void* arg) {
+    int ghostIndex = *(int*)arg;
+    Ghost* ghost = &gameState.ghosts[ghostIndex];
     sfClock* clock = sfClock_create();
-    float speed = 80.0f; // pixels per second
+    float speed = 75.0f;
 
     while (1) {
-        sfTime elapsed = sfClock_restart(clock);
-        float dt = sfTime_asSeconds(elapsed);
+        float deltaTime = sfTime_asSeconds(sfClock_restart(clock));
 
-        pthread_mutex_lock(&stateMutex);
+        // --- Step 1: Exit the ghost house once ---
+        if (!ghost->hasExited) {
+            sem_wait(&keySemaphore);
+            sem_wait(&exitPermitSemaphore);
 
-        // Calculate next direction if needed (random for now)
-        if (rand() % 100 < 20) { // change direction sometimes
-            enum Direction directions[4] = {UP, DOWN, LEFT, RIGHT};
-            ghost->direction = directions[rand() % 4];
+            pthread_mutex_lock(&resourceMutex);
+            ghost->hasExited = true;
+
+            
+            ghost->pos = (sfVector2f){13 * TILE_SIZE,11 * TILE_SIZE + 90};
+            pthread_mutex_unlock(&resourceMutex);
+
+            sem_post(&exitPermitSemaphore);
+
+            sem_post(&keySemaphore);
         }
 
-        // Proposed movement
-        float dx = 0, dy = 0;
-        switch (ghost->direction) {
-            case UP:    dy = -speed * dt; break;
-            case DOWN:  dy =  speed * dt; break;
-            case LEFT:  dx = -speed * dt; break;
-            case RIGHT: dx =  speed * dt; break;
-            default: break;
+        // --- Step 2: Use BFS to chase Pac-Man ---
+        if (ghost->hasExited) {
+            
+            pthread_mutex_lock(&stateMutex);
+            
+            Node ghostPos = findEntityInGrid('1' + ghostIndex); // e.g., ghost 0 is '1'
+            Node pacmanPos = findEntityInGrid('P');
+            
+            pthread_mutex_unlock(&stateMutex);
+
+            if (ghostPos.r == -1 || pacmanPos.r == -1)continue; // skip if positions not found
+
+            // Initialize BFS dist and predecessor tracking
+            int dist[ROWS][COLS];
+            Node prev[ROWS][COLS];
+
+            for (int row = 0; row < ROWS; row++){
+                for (int col = 0; col < COLS; col++){
+                    dist[row][col] = INT_MAX;
+                }
+            }
+
+            // BFS queue setup
+            Node queue[MAX_QUEUE];
+            int front = 0;
+            int rear = 0;
+
+            dist[ghostPos.r][ghostPos.c] = 0;
+            queue[rear++] = ghostPos;
+
+            // --- BFS loop ---
+            while (front < rear) {
+                Node current = queue[front++];
+
+                if (current.r == pacmanPos.r && current.c == pacmanPos.c)
+                    break; // found path to Pac-Man
+
+                // Explore 4 directions
+                for (int i = 0; i < 4; i++) {
+                    int newRow = current.r + rowOffset[i];
+                    int newCol = current.c + colOffset[i];
+
+                    // Skip invalid cells
+                    if (newRow < 0 || newRow >= ROWS || newCol < 0 || newCol >= COLS)
+                        continue;
+                    if (grid[newRow][newCol] == '#') // wall check
+                        continue;
+
+                    // Relax edge if shorter path found
+                    if (dist[newRow][newCol] > dist[current.r][current.c] + 1) {
+                        
+                        dist[newRow][newCol] = dist[current.r][current.c] + 1;
+                        prev[newRow][newCol] = current;
+                        queue[rear++] = (Node){newRow, newCol};
+                    }
+                }
+            }
+
+            // --- Backtrack to find next step toward Pac-Man ---
+            int nextRow = pacmanPos.r;
+            int nextCol = pacmanPos.c;
+
+            if (dist[nextRow][nextCol] < INT_MAX) {
+                // Go backward until we reach ghost's current tile
+                while (prev[nextRow][nextCol].r != ghostPos.r ||
+                       prev[nextRow][nextCol].c != ghostPos.c) {
+
+                    Node pre = prev[nextRow][nextCol];
+                    nextRow = pre.r;
+                    nextCol = pre.c;
+                }
+
+                // Determine direction from ghost to next tile
+                int deltaRow = nextRow - ghostPos.r;
+                int deltaCol = nextCol - ghostPos.c;
+
+                if (deltaRow == -1) ghost->direction = UP;
+                else if (deltaRow == 1) ghost->direction = DOWN;
+                else if (deltaCol == -1) ghost->direction = LEFT;
+                else if (deltaCol == 1) ghost->direction = RIGHT;
+            } else {
+                // No path — fallback to random direction
+                int random = rand() % 4;
+                if(random == 0)ghost->direction = UP ; 
+                else if(random == 1)ghost->direction = DOWN ; 
+                else if(random == 2)ghost->direction = LEFT ; 
+                else ghost->direction = RIGHT ; 
+            }
+
+            // --- Move the ghost based on its direction ---
+            float dx = 0, dy = 0;
+            switch (ghost->direction) {
+                case UP:    dy = -speed * deltaTime; break;
+                case DOWN:  dy =  speed * deltaTime; break;
+                case LEFT:  dx = -speed * deltaTime; break;
+                case RIGHT: dx =  speed * deltaTime; break;
+            }
+
+            float newX = ghost->pos.x + dx;
+            float newY = ghost->pos.y + dy;
+            int newR = (int)((newY - 90) / TILE_SIZE);
+            int newC = (int)(newX / TILE_SIZE);
+
+            // Move only if new cell is not a wall
+            if (newR >= 0 && newR < ROWS && newC >= 0 && newC < COLS && grid[newR][newC] != '#') {
+            
+
+                pthread_mutex_lock(&stateMutex);
+
+                ghost->pos.x = newX;
+                ghost->pos.y = newY;
+
+                pthread_mutex_unlock(&stateMutex);
+            } else {
+                // Collision — try a different direction next frame
+                int random = rand() % 4;
+                if(random == 0)ghost->direction = UP ; 
+                else if(random == 1)ghost->direction = DOWN ; 
+                else if(random == 2)ghost->direction = LEFT ; 
+                else ghost->direction = RIGHT ; 
+            }
         }
 
-        float newX = ghost->pos.x + dx;
-        float newY = ghost->pos.y + dy;
-        int gridX = (int)(newX) / TILE_SIZE;
-        int gridY = ((int)(newY - 100)) / TILE_SIZE;
-
-        // Stay inside bounds and avoid walls
-        if (gridY >= 0 && gridY < ROWS && gridX >= 0 && gridX < COLS && grid[gridY][gridX] != '#') {
-            ghost->pos.x = newX;
-            ghost->pos.y = newY;
-        } else {
-            // Hit a wall — choose a new direction
-            enum Direction directions[4] = {UP, DOWN, LEFT, RIGHT};
-            ghost->direction = directions[rand() % 4];
-        }
-
-        pthread_mutex_unlock(&stateMutex);
-
-        usleep(1000000 / 60); 
+        usleep(1000000 / 60); // ~60 FPS
     }
 
     sfClock_destroy(clock);
@@ -700,35 +903,47 @@ void* ghostThread(void* arg) {
 
 void initializeGame(){
 
+    sem_init(&keySemaphore,0,2);
+
+    sem_init(&exitPermitSemaphore,0,2);
+
+    pthread_mutex_init(&resourceMutex,NULL);
+
 
     //sample ghost
     for (int row = 0; row < ROWS; row++) {
         for (int col = 0; col < COLS; col++) {
             if (grid[row][col] == '1') {
-                sfVector2f temp = {col * TILE_SIZE,row * TILE_SIZE + 100};
+                sfVector2f temp = {col * TILE_SIZE,row * TILE_SIZE + 90};
                 gameState.ghosts[0].pos = temp;
                 gameState.ghosts[0].direction = UP;
+                gameState.ghosts[0].hasExited = false;
             }
             if (grid[row][col] == '2') {
-                sfVector2f temp = {col * TILE_SIZE,row * TILE_SIZE + 100};
+                sfVector2f temp = {col * TILE_SIZE,row * TILE_SIZE + 90};
                 gameState.ghosts[1].pos = temp;
                 gameState.ghosts[1].direction = DOWN;
+                gameState.ghosts[1].hasExited = false;
             }
             if (grid[row][col] == '3') {
-                sfVector2f temp = {col * TILE_SIZE,row * TILE_SIZE + 100};
+                sfVector2f temp = {col * TILE_SIZE,row * TILE_SIZE + 90};
                 gameState.ghosts[2].pos = temp;
                 gameState.ghosts[2].direction = LEFT;
+                gameState.ghosts[2].hasExited = false;
             }
             if (grid[row][col] == '4') {
-                sfVector2f temp = {col * TILE_SIZE,row * TILE_SIZE + 100};
+                sfVector2f temp = {col * TILE_SIZE,row * TILE_SIZE + 90};
                 gameState.ghosts[3].pos = temp;
                 gameState.ghosts[3].direction = RIGHT;
+                gameState.ghosts[3].hasExited = false;
             }
         }
     }
 
     gameState.pacman.mouth = OPEN;
     uiState.currentState = STATE_MAIN_MENU;
+
+    initPacman();
 
 }
 
@@ -749,7 +964,7 @@ int main() {
     int ghostIndices[4] = {0, 1, 2, 3};
 
     for (int i = 0; i < 4; i++) {
-        pthread_create(&GhostThread[i], NULL, ghostLogic, &ghostIndices[i]);
+        pthread_create(&GhostThread[i], NULL, GhostThreadFunction, &ghostIndices[i]);
     }
 
     pthread_join(GameEngineThread, NULL);
