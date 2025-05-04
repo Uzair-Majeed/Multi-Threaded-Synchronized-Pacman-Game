@@ -8,7 +8,7 @@
 #include <stdbool.h>
 #include <time.h>
 #include <limits.h>
-
+//void* GhostThreadFunction(int i);
 
 #define TILE_SIZE 24
 #define ROWS 31
@@ -21,8 +21,14 @@ typedef struct {
     int r;
     int c;
 } Node;
-
-
+int ghost1x = 12;
+int ghost2x = 16;
+int ghost3x = 12;
+int ghost4x = 16;
+int ghost1y = 14;
+int ghost2y = 14;
+int ghost3y = 15;
+int ghost4y = 15;
 char grid[ROWS][COLS] = {
     "############################", // 0
     "#............##..........O.#", // 1
@@ -549,7 +555,6 @@ void handleInput(sfRenderWindow *window) {
     }
 }
 
-
 void initPacman(){
 
 
@@ -728,8 +733,12 @@ static const int colOffset[4] = {  0, 0, -1, 1 };
 
 sem_t keySemaphore;
 sem_t exitPermitSemaphore;
+sem_t mutex2;
 pthread_mutex_t resourceMutex = PTHREAD_MUTEX_INITIALIZER;
-
+//variables for ghost deaths
+bool die[4]={false,false,false,false};
+bool ghostkey[4]={false,false,false,false};
+sfVector2f pos1,pos2,pos3,pos4;
 // Helper to find entity (like ghost '1', '2'... or 'P' for Pac-Man) in the grid
 
 Node findEntityInGrid(char target) {
@@ -742,6 +751,76 @@ Node findEntityInGrid(char target) {
     }
     return (Node){-1, -1}; // Entity not found
 }
+
+//ghost death function
+// void ghostdeath(int i){
+
+//     if(gameState.ghosts[i].pos.x==gameState.pacman.pos.x && gameState.ghosts[i].pos.y==gameState.pacman.pos.y){
+//        if(i==0){
+//         gameState.ghosts[i].pos=pos1;
+//          die[i]=true;  
+//         }
+//         if(i==1){
+//             gameState.ghosts[i].pos=pos2; 
+//          die[i]=true;        
+//         }
+//        else if(i==2){
+//         gameState.ghosts[i].pos=pos3;
+//          die[i]=true;   
+//        }
+//        else if(i==3){
+//         gameState.ghosts[i].pos=pos4;
+//          die[i]=true;   
+//        }  
+//     }
+// }
+
+// //getting out of cage functions
+// void cagefree(int i){
+//     sem_wait(&mutex2); 
+//     sem_wait(&keySemaphore);
+//     sem_wait(&exitPermitSemaphore);
+//     printf("waiting for resources : %d",i);
+//     ghostkey[i] = true; 
+//     printf("Got resources : %d",i);
+//     sem_post(&mutex2); 
+    
+    
+//     if (die[i]) {
+//         sem_wait(&mutex2); 
+//         ghostkey[i] = false; 
+//         die[i]=false;
+//         sem_post(&mutex2); 
+//     }     
+// }
+// bool start=true;
+
+// //main thread functions
+// void* GhostThread4(void* arg) {
+//     int ghostIndex = *(int*)arg;
+//     Ghost* ghost = &gameState.ghosts[ghostIndex];
+//     sfClock* clock = sfClock_create();
+//     float speed = 75.0f;
+//         while (true) { 
+//         if(start){}
+//             if (die[3]) {
+//               ghostkey[3] = false; 
+//             }
+//             if(ghostkey[3]==false){
+//                cagefree(3);
+//                if(ghostkey[3]==true){
+//                 ghost->pos = (sfVector2f){13 * TILE_SIZE,11 * TILE_SIZE + 90};
+//                }
+//                }
+//             else{
+//                 GhostThreadFunction(3);
+//                 ghostdeath(0);
+//             }  
+    
+//         }
+//         pthread_exit(NULL); 
+//         return NULL;    
+// }    
 
 void* GhostThreadFunction(void* arg) {
     int ghostIndex = *(int*)arg;
@@ -756,21 +835,17 @@ void* GhostThreadFunction(void* arg) {
         if (!ghost->hasExited) {
             sem_wait(&keySemaphore);
             sem_wait(&exitPermitSemaphore);
-
             pthread_mutex_lock(&resourceMutex);
             ghost->hasExited = true;
-
-            
             ghost->pos = (sfVector2f){13 * TILE_SIZE,11 * TILE_SIZE + 90};
             pthread_mutex_unlock(&resourceMutex);
-
             sem_post(&exitPermitSemaphore);
 
             sem_post(&keySemaphore);
         }
 
         // --- Step 2: Use BFS to chase Pac-Man ---
-        if (ghost->hasExited) {
+        // if (ghost->hasExited) {
             
             pthread_mutex_lock(&stateMutex);
             
@@ -890,7 +965,7 @@ void* GhostThreadFunction(void* arg) {
                 else if(random == 2)ghost->direction = LEFT ; 
                 else ghost->direction = RIGHT ; 
             }
-        }
+        // }
 
         usleep(1000000 / 60); // ~60 FPS
     }
@@ -904,7 +979,7 @@ void* GhostThreadFunction(void* arg) {
 void initializeGame(){
 
     sem_init(&keySemaphore,0,2);
-
+    sem_init(&mutex2, 0, 1);
     sem_init(&exitPermitSemaphore,0,2);
 
     pthread_mutex_init(&resourceMutex,NULL);
@@ -916,24 +991,28 @@ void initializeGame(){
             if (grid[row][col] == '1') {
                 sfVector2f temp = {col * TILE_SIZE,row * TILE_SIZE + 90};
                 gameState.ghosts[0].pos = temp;
+                pos1=temp;
                 gameState.ghosts[0].direction = UP;
                 gameState.ghosts[0].hasExited = false;
             }
             if (grid[row][col] == '2') {
                 sfVector2f temp = {col * TILE_SIZE,row * TILE_SIZE + 90};
                 gameState.ghosts[1].pos = temp;
+                pos2=temp;
                 gameState.ghosts[1].direction = DOWN;
                 gameState.ghosts[1].hasExited = false;
             }
             if (grid[row][col] == '3') {
                 sfVector2f temp = {col * TILE_SIZE,row * TILE_SIZE + 90};
                 gameState.ghosts[2].pos = temp;
+                pos3=temp;
                 gameState.ghosts[2].direction = LEFT;
                 gameState.ghosts[2].hasExited = false;
             }
             if (grid[row][col] == '4') {
                 sfVector2f temp = {col * TILE_SIZE,row * TILE_SIZE + 90};
                 gameState.ghosts[3].pos = temp;
+                pos4=temp;
                 gameState.ghosts[3].direction = RIGHT;
                 gameState.ghosts[3].hasExited = false;
             }
@@ -963,9 +1042,11 @@ int main() {
 
     int ghostIndices[4] = {0, 1, 2, 3};
 
-    for (int i = 0; i < 4; i++) {
-        pthread_create(&GhostThread[i], NULL, GhostThreadFunction, &ghostIndices[i]);
-    }
+     //pthread_create(&GhostThread[3], NULL, GhostThread4, &ghostIndices[3]);
+for (int i=0;i<4;i++){
+    pthread_create(&GhostThread[i], NULL,GhostThreadFunction, &ghostIndices[i]);
+
+}
 
     pthread_join(GameEngineThread, NULL);
 
