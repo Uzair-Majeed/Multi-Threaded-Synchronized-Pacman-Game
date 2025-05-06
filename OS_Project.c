@@ -7,12 +7,13 @@
 #include <SFML/Graphics.h>
 #include <stdbool.h>
 #include <time.h>
+#include <math.h>
 #include <limits.h>
 //void* GhostThreadFunction(int i);
 
 #define TILE_SIZE 24
-#define ROWS 31
-#define COLS 28
+#define ROWS 32
+#define COLS 29
 
 #define MAX_QUEUE  (ROWS * COLS) //for queue size in BFS algorithm
 
@@ -589,7 +590,12 @@ void movePacman(float pacmanSpeed,float deltaTime){
 
     if (mouthTimer >= mouthInterval) {
         mouthTimer = 0.0f;
-        gameState.pacman.mouth = (gameState.pacman.mouth + 1) % 3;
+        switch(gameState.pacman.mouth) {
+            case OPEN:      gameState.pacman.mouth = HALF_OPEN; break;
+            case HALF_OPEN: gameState.pacman.mouth = CLOSED;   break;
+            case CLOSED:    gameState.pacman.mouth = OPEN;     break;
+        }
+
     }
 
     float newX = gameState.pacman.pos.x + dx;
@@ -827,153 +833,201 @@ void* GhostThreadFunction(void* arg) {
     Ghost* ghost = &gameState.ghosts[ghostIndex];
     sfClock* clock = sfClock_create();
     float speed = 75.0f;
+    
+    // For path recalculation throttling
+    sfClock* pathClock = sfClock_create();
+    float pathUpdateInterval = 0.5f; // Update path twice per second
+    
+    // Each ghost gets slightly different speed for variety
+    speed += (ghostIndex * 5); 
 
     while (1) {
         float deltaTime = sfTime_asSeconds(sfClock_restart(clock));
-
-        // --- Step 1: Exit the ghost house once ---
+        
+        // --- Ghost House Exit Logic ---
         if (!ghost->hasExited) {
-            sem_wait(&keySemaphore);
-            sem_wait(&exitPermitSemaphore);
-            pthread_mutex_lock(&resourceMutex);
+            pthread_mutex_lock(&stateMutex);
             ghost->hasExited = true;
-            ghost->pos = (sfVector2f){13 * TILE_SIZE,11 * TILE_SIZE + 90};
-            pthread_mutex_unlock(&resourceMutex);
-            sem_post(&exitPermitSemaphore);
-
-            sem_post(&keySemaphore);
+            ghost->pos = (sfVector2f){13 * TILE_SIZE, 11 * TILE_SIZE + 90};
+            pthread_mutex_unlock(&stateMutex);
+            usleep(ghostIndex * 500000); // Stagger ghost exits
+            continue;
         }
 
-        // --- Step 2: Use BFS to chase Pac-Man ---
-        // if (ghost->hasExited) {
+        // --- Pathfinding Update (Throttled) ---
+        bool shouldUpdatePath = sfTime_asSeconds(sfClock_getElapsedTime(pathClock)) > pathUpdateInterval;
+        
+        if (shouldUpdatePath) {
+            sfClock_restart(pathClock);
             
             pthread_mutex_lock(&stateMutex);
             
-            Node ghostPos = findEntityInGrid('1' + ghostIndex); // e.g., ghost 0 is '1'
-            Node pacmanPos = findEntityInGrid('P');
+            // Get current positions in grid coordinates
+            Node ghostPos = {
+                (int)((ghost->pos.y - 90) / TILE_SIZE),
+                (int)(ghost->pos.x / TILE_SIZE)
+            };
             
-            pthread_mutex_unlock(&stateMutex);
+            Node pacmanPos = {
+                (int)((gameState.pacman.pos.y - 120) / TILE_SIZE),
+                (int)(gameState.pacman.pos.x / TILE_SIZE)
+            };
+            
+            // Ghost-specific targeting (classic Pac-Man behavior)
+            switch (ghostIndex) {
+                case 0: // Red - Direct chase
+                    break;
+                case 1: // Pink - Targets 4 tiles ahead of Pac-Man's direction
+                    switch (gameState.pacman.direction) {
+                        case UP:    pacmanPos.r -= 4; break;
+                        case DOWN:  pacmanPos.r += 4; break;
+                        case LEFT:  pacmanPos.c -= 4; break;
+                        case RIGHT: pacmanPos.c += 4; break;
+                    }
+                    break;
+                case 2: // Cyan - Hybrid targeting
+                    {
+                        Node redGhostPos = {
+                            (int)((gameState.ghosts[0].pos.y - 90) / TILE_SIZE),
+                            (int)(gameState.ghosts[0].pos.x / TILE_SIZE)
+                        };
+                        // Vector from Red ghost to 2 tiles ahead of Pac-Man
+                        pacmanPos.r = 2 * pacmanPos.r - redGhostPos.r;
+                        pacmanPos.c = 2 * pacmanPos.c - redGhostPos.c;
+                    }
+                    break;
+                case 3: // Orange - Chase until close, then scatter
+                    {
+                        float dr = ghostPos.r - pacmanPos.r;
+                        float dc = ghostPos.c - pacmanPos.c;
+                        float distance = sqrtf(dr*dr + dc*dc);  // More efficient than powf()
+                        if (distance < 8) { // If close to Pac-Man
+                            pacmanPos.r = 0;  // Target corner
+                            pacmanPos.c = 0;
+                        }
+                    }
+                    break;
+            }
+            
+            // Boundary checks
+            pacmanPos.r = (pacmanPos.r < 0) ? 0 : (pacmanPos.r >= ROWS) ? ROWS-1 : pacmanPos.r;
+            pacmanPos.c = (pacmanPos.c < 0) ? 0 : (pacmanPos.c >= COLS) ? COLS-1 : pacmanPos.c;
 
-            if (ghostPos.r == -1 || pacmanPos.r == -1)continue; // skip if positions not found
-
-            // Initialize BFS dist and predecessor tracking
+            // BFS initialization
             int dist[ROWS][COLS];
             Node prev[ROWS][COLS];
-
-            for (int row = 0; row < ROWS; row++){
-                for (int col = 0; col < COLS; col++){
-                    dist[row][col] = INT_MAX;
+            for (int r = 0; r < ROWS; r++) {
+                for (int c = 0; c < COLS; c++) {
+                    dist[r][c] = INT_MAX;
                 }
             }
-
-            // BFS queue setup
+            
+            // BFS queue
             Node queue[MAX_QUEUE];
-            int front = 0;
-            int rear = 0;
-
+            int front = 0, rear = 0;
+            
             dist[ghostPos.r][ghostPos.c] = 0;
             queue[rear++] = ghostPos;
-
-            // --- BFS loop ---
+            
+            // --- BFS Execution ---
             while (front < rear) {
                 Node current = queue[front++];
-
-                if (current.r == pacmanPos.r && current.c == pacmanPos.c)
-                    break; // found path to Pac-Man
-
-                // Explore 4 directions
+                
+                // Early exit if we reach Pac-Man
+                if (current.r == pacmanPos.r && current.c == pacmanPos.c) break;
+                
+                // Explore neighbors
                 for (int i = 0; i < 4; i++) {
-                    int newRow = current.r + rowOffset[i];
-                    int newCol = current.c + colOffset[i];
-
-                    // Skip invalid cells
-                    if (newRow < 0 || newRow >= ROWS || newCol < 0 || newCol >= COLS)
+                    int newR = current.r + rowOffset[i];
+                    int newC = current.c + colOffset[i];
+                    
+                    // Skip invalid or wall tiles
+                    if (newR < 0 || newR >= ROWS || newC < 0 || newC >= COLS || 
+                        grid[newR][newC] == '#') {
                         continue;
-                    if (grid[newRow][newCol] == '#') // wall check
-                        continue;
-
-                    // Relax edge if shorter path found
-                    if (dist[newRow][newCol] > dist[current.r][current.c] + 1) {
-                        
-                        dist[newRow][newCol] = dist[current.r][current.c] + 1;
-                        prev[newRow][newCol] = current;
-                        queue[rear++] = (Node){newRow, newCol};
+                    }
+                    
+                    // Update if found shorter path
+                    if (dist[newR][newC] > dist[current.r][current.c] + 1) {
+                        dist[newR][newC] = dist[current.r][current.c] + 1;
+                        prev[newR][newC] = current;
+                        queue[rear++] = (Node){newR, newC};
                     }
                 }
             }
-
-            // --- Backtrack to find next step toward Pac-Man ---
-            int nextRow = pacmanPos.r;
-            int nextCol = pacmanPos.c;
-
-            if (dist[nextRow][nextCol] < INT_MAX) {
-                // Go backward until we reach ghost's current tile
-                while (prev[nextRow][nextCol].r != ghostPos.r ||
-                       prev[nextRow][nextCol].c != ghostPos.c) {
-
-                    Node pre = prev[nextRow][nextCol];
-                    nextRow = pre.r;
-                    nextCol = pre.c;
-                }
-
-                // Determine direction from ghost to next tile
-                int deltaRow = nextRow - ghostPos.r;
-                int deltaCol = nextCol - ghostPos.c;
-
-                if (deltaRow == -1) ghost->direction = UP;
-                else if (deltaRow == 1) ghost->direction = DOWN;
-                else if (deltaCol == -1) ghost->direction = LEFT;
-                else if (deltaCol == 1) ghost->direction = RIGHT;
-            } else {
-                // No path — fallback to random direction
-                int random = rand() % 4;
-                if(random == 0)ghost->direction = UP ; 
-                else if(random == 1)ghost->direction = DOWN ; 
-                else if(random == 2)ghost->direction = LEFT ; 
-                else ghost->direction = RIGHT ; 
-            }
-
-            // --- Move the ghost based on its direction ---
-            float dx = 0, dy = 0;
-            switch (ghost->direction) {
-                case UP:    dy = -speed * deltaTime; break;
-                case DOWN:  dy =  speed * deltaTime; break;
-                case LEFT:  dx = -speed * deltaTime; break;
-                case RIGHT: dx =  speed * deltaTime; break;
-            }
-
-            float newX = ghost->pos.x + dx;
-            float newY = ghost->pos.y + dy;
-            int newR = (int)((newY - 90) / TILE_SIZE);
-            int newC = (int)(newX / TILE_SIZE);
-
-            // Move only if new cell is not a wall
-            if (newR >= 0 && newR < ROWS && newC >= 0 && newC < COLS && grid[newR][newC] != '#') {
             
-
-                pthread_mutex_lock(&stateMutex);
-
-                ghost->pos.x = newX;
-                ghost->pos.y = newY;
-
-                pthread_mutex_unlock(&stateMutex);
-            } else {
-                // Collision — try a different direction next frame
-                int random = rand() % 4;
-                if(random == 0)ghost->direction = UP ; 
-                else if(random == 1)ghost->direction = DOWN ; 
-                else if(random == 2)ghost->direction = LEFT ; 
-                else ghost->direction = RIGHT ; 
+            // --- Determine Next Direction ---
+            if (dist[pacmanPos.r][pacmanPos.c] < INT_MAX) {
+                // Backtrack to find first move
+                Node step = pacmanPos;
+                while (prev[step.r][step.c].r != ghostPos.r || 
+                       prev[step.r][step.c].c != ghostPos.c) {
+                    step = prev[step.r][step.c];
+                }
+                
+                // Set direction based on movement needed
+                if (step.r < ghostPos.r) ghost->direction = UP;
+                else if (step.r > ghostPos.r) ghost->direction = DOWN;
+                else if (step.c < ghostPos.c) ghost->direction = LEFT;
+                else if (step.c > ghostPos.c) ghost->direction = RIGHT;
             }
-        // }
-
+            
+            pthread_mutex_unlock(&stateMutex);
+        }
+        
+        // --- Movement Execution ---
+        float dx = 0, dy = 0;
+        switch (ghost->direction) {
+            case UP:    dy = -speed * deltaTime; break;
+            case DOWN:  dy =  speed * deltaTime; break;
+            case LEFT:  dx = -speed * deltaTime; break;
+            case RIGHT: dx =  speed * deltaTime; break;
+        }
+        
+        float newX = ghost->pos.x + dx;
+        float newY = ghost->pos.y + dy;
+        
+        // Convert new position to grid coordinates for collision check
+        int newR = (int)((newY - 90) / TILE_SIZE);
+        int newC = (int)(newX / TILE_SIZE);
+        
+        // Check if new position is valid
+        if (newR >= 0 && newR < ROWS && newC >= 0 && newC < COLS && 
+            grid[newR][newC] != '#') {
+            pthread_mutex_lock(&stateMutex);
+            ghost->pos.x = newX;
+            ghost->pos.y = newY;
+            pthread_mutex_unlock(&stateMutex);
+        } else {
+            // Hit a wall - try to find a new valid direction
+            enum Direction validDirs[4];
+            int validCount = 0;
+            
+            // Check all possible directions
+            for (int dirInt = UP; dirInt <= RIGHT; dirInt++) {
+                enum Direction dir = (enum Direction)dirInt;
+                int testR = (int)((ghost->pos.y - 90) / TILE_SIZE) + rowOffset[dir];
+                int testC = (int)(ghost->pos.x / TILE_SIZE + colOffset[dir]);
+                
+                if (testR >= 0 && testR < ROWS && testC >= 0 && testC < COLS && 
+                    grid[testR][testC] != '#') {
+                    validDirs[validCount++] = dir;
+                }
+            }
+            
+            // Choose random valid direction if stuck
+            if (validCount > 0) {
+                ghost->direction = validDirs[rand() % validCount];
+            }
+        }
+        
         usleep(1000000 / 60); // ~60 FPS
     }
-
+    
     sfClock_destroy(clock);
+    sfClock_destroy(pathClock);
     return NULL;
 }
-
 
 
 void initializeGame(){
