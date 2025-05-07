@@ -832,7 +832,7 @@ void* GhostThreadFunction(void* arg) {
         if(ghost->state == CHASE){
         // --- Ghost House Exit Logic ---
         if (!ghost->hasExited) {
-            static const float exitDelay[] = {8.0f, 16.0f, 24.0f, 32.0f}; // Delay for each ghost
+            static const float exitDelay[] = {5.0f, 10.0f, 15.0f, 30.0f}; // Delay for each ghost
             static float exitTimers[4] = {0.0f, 0.0f, 0.0f, 0.0f};
 
             exitTimers[ghostIndex] += deltaTime;
