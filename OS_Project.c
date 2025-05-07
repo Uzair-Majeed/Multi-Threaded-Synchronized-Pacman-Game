@@ -9,19 +9,22 @@
 #include <time.h>
 #include <math.h>
 #include <limits.h>
-//void* GhostThreadFunction(int i);
+#include <string.h>
 
 #define TILE_SIZE 24
 #define ROWS 32
 #define COLS 29
 
 #define MAX_QUEUE  (ROWS * COLS) //for queue size in BFS algorithm
+bool dotMap[ROWS][COLS];
+bool powerPellet[ROWS][COLS];
 
 // A small struct for BFS queue
 typedef struct {
     int r;
     int c;
 } Node;
+
 int ghost1x = 12;
 int ghost2x = 16;
 int ghost3x = 12;
@@ -64,6 +67,17 @@ char grid[ROWS][COLS] = {
     "############################"  // 30
 };
 
+//generate map
+void generateDotMap() {
+    for (int i = 0; i < ROWS; i++) {
+        for (int j = 0; j < COLS; j++) {
+            dotMap[i][j] = (grid[i][j] == '.');
+            powerPellet[i][j] = (grid[i][j] == 'O');
+        }
+    }
+}
+
+
 
 enum Direction{
     UP,
@@ -92,7 +106,6 @@ enum TileType {
 
 enum PacMouth{
     OPEN,
-    HALF_OPEN,
     CLOSED,
 };
 
@@ -100,12 +113,9 @@ enum PacMouth{
 enum TargetState
 {
 	CHASE,
-	CORNER,
 	FRIGHTENED,
-	GOHOME,		// inital state to pathfind to the square above the door
-	HOMEBASE,	// indefinite state going up and down in home
-	LEAVEHOME,
-	ENTERHOME,
+	GOHOME
+
 };
 enum State
 {
@@ -118,7 +128,7 @@ enum State
 };
 
 typedef struct {
-
+    int r,c;
     sfVector2f pos;
     enum Direction direction;
     int lives;
@@ -126,12 +136,13 @@ typedef struct {
 } Pacman;
 
 typedef struct {
+    int r,c;
     sfVector2f pos;
     enum Direction direction;
     enum GhostType color; // Optional
     enum TargetState state; // or other states
     bool hasExited;
-    bool hasKey;
+    float frightenedTimer;
 } Ghost;
 
 typedef struct {
@@ -167,6 +178,7 @@ pthread_mutex_t uiMutex = PTHREAD_MUTEX_INITIALIZER;
 GameState gameState;
 
 pthread_mutex_t stateMutex = PTHREAD_MUTEX_INITIALIZER;
+
 
 
 // Renders the Main Menu screen
@@ -266,15 +278,29 @@ void renderGraphics(sfRenderWindow * window){
 
 
     sfFont* font = sfFont_createFromFile("PAC-FONT.TTF");
+    sfFont* font2 = sfFont_createFromFile("THEBOLDFONT-FREEVERSION.ttf");
 
     //score
     sfText* score = sfText_create();
     sfText_setFont(score,font);
-    sfText_setString(score, "SCORE");  
+    sfText_setString(score, "SCORE : ");
+
     sfText_setCharacterSize(score,40);
     sfVector2f textPosition = {20.0f, 10.0f}; 
     sfText_setPosition(score, textPosition);
     sfText_setColor(score,sfYellow);
+    //======
+    sfText* sc = sfText_create();
+    sfText_setFont(sc,font2);
+    char str[12];
+    sprintf(str, "%d", gameState.score);
+
+    sfText_setString(sc, str);
+
+    sfText_setCharacterSize(sc,40);
+    sfVector2f textPosition2 = {250.0f, 10.0f}; 
+    sfText_setPosition(sc, textPosition2);
+    sfText_setColor(sc,sfYellow);
 
     //print heart
     sfTexture * htexture = sfTexture_createFromFile("heartt.png",NULL);
@@ -298,12 +324,12 @@ void renderGraphics(sfRenderWindow * window){
     //display pacman
     sfSprite * pac = sfSprite_create();
     sfTexture * pacTexture;
-    if(gameState.pacman.mouth == OPEN)pacTexture = sfTexture_createFromFile("pacman1.png",NULL);
-    else if(gameState.pacman.mouth == HALF_OPEN)pacTexture = sfTexture_createFromFile("pacman2.png",NULL);
+    if(gameState.pacman.mouth == OPEN)pacTexture = sfTexture_createFromFile("pacman2.png",NULL);
     else pacTexture = sfTexture_createFromFile("pacman3.png",NULL);
     
     sfSprite_setTexture(pac,pacTexture,sfTrue);
     sfSprite_setPosition(pac,gameState.pacman.pos);
+    sfSprite_setScale(pac,(sfVector2f){0.85f,0.85f});
     switch (gameState.pacman.direction) {
         case UP:
             sfSprite_setRotation(pac, 270.0f); // up is 270°
@@ -329,28 +355,52 @@ void renderGraphics(sfRenderWindow * window){
     for(int i=0;i<4;i++)ghostSpr[i] = sfSprite_create();
     sfTexture* ghTexture[4];
 
-    if(gameState.ghosts[0].direction == UP)ghTexture[0] = sfTexture_createFromFile("red_ghost_up.png",NULL);
-    else if(gameState.ghosts[0].direction == DOWN)ghTexture[0] = sfTexture_createFromFile("red_ghost_down.png",NULL);
-    else if(gameState.ghosts[0].direction == LEFT)ghTexture[0] = sfTexture_createFromFile("red_ghost_left.png",NULL);
-    else if(gameState.ghosts[0].direction == RIGHT)ghTexture[0] = sfTexture_createFromFile("red_ghost_right.png",NULL);
+    for(int i=0; i< 4;i++){
 
-    if(gameState.ghosts[1].direction == UP)ghTexture[1] = sfTexture_createFromFile("pink_ghost_up.png",NULL);
-    else if(gameState.ghosts[1].direction == DOWN)ghTexture[1] = sfTexture_createFromFile("pink_ghost_down.png",NULL);
-    else if(gameState.ghosts[1].direction == LEFT)ghTexture[1] = sfTexture_createFromFile("pink_ghost_left.png",NULL);
-    else if(gameState.ghosts[1].direction == RIGHT)ghTexture[1] = sfTexture_createFromFile("pink_ghost_right.png",NULL);
+        if(gameState.ghosts[i].state == CHASE){
+            if(i == 0){
+            if(gameState.ghosts[0].direction == UP)ghTexture[0] = sfTexture_createFromFile("red_ghost_up.png",NULL);
+            else if(gameState.ghosts[0].direction == DOWN)ghTexture[0] = sfTexture_createFromFile("red_ghost_down.png",NULL);
+            else if(gameState.ghosts[0].direction == LEFT)ghTexture[0] = sfTexture_createFromFile("red_ghost_left.png",NULL);
+            else if(gameState.ghosts[0].direction == RIGHT)ghTexture[0] = sfTexture_createFromFile("red_ghost_right.png",NULL);
+        
+            }
+            else if(i==1){
+                if(gameState.ghosts[1].direction == UP)ghTexture[1] = sfTexture_createFromFile("pink_ghost_up.png",NULL);
+                else if(gameState.ghosts[1].direction == DOWN)ghTexture[1] = sfTexture_createFromFile("pink_ghost_down.png",NULL);
+                else if(gameState.ghosts[1].direction == LEFT)ghTexture[1] = sfTexture_createFromFile("pink_ghost_left.png",NULL);
+                else if(gameState.ghosts[1].direction == RIGHT)ghTexture[1] = sfTexture_createFromFile("pink_ghost_right.png",NULL);
+            
+            
 
+            }
+            else if(i==2){
+                if(gameState.ghosts[2].direction == UP)ghTexture[2] = sfTexture_createFromFile("cyan_ghost_up.png",NULL);
+                else if(gameState.ghosts[2].direction == DOWN)ghTexture[2] = sfTexture_createFromFile("cyan_ghost_down.png",NULL);
+                else if(gameState.ghosts[2].direction == LEFT)ghTexture[2] = sfTexture_createFromFile("cyan_ghost_left.png",NULL);
+                else if(gameState.ghosts[2].direction == RIGHT)ghTexture[2] = sfTexture_createFromFile("cyan_ghost_right.png",NULL);
+            
 
-    if(gameState.ghosts[2].direction == UP)ghTexture[2] = sfTexture_createFromFile("cyan_ghost_up.png",NULL);
-    else if(gameState.ghosts[2].direction == DOWN)ghTexture[2] = sfTexture_createFromFile("cyan_ghost_down.png",NULL);
-    else if(gameState.ghosts[2].direction == LEFT)ghTexture[2] = sfTexture_createFromFile("cyan_ghost_left.png",NULL);
-    else if(gameState.ghosts[2].direction == RIGHT)ghTexture[2] = sfTexture_createFromFile("cyan_ghost_right.png",NULL);
+            }
+            else{
+            if(gameState.ghosts[3].direction == UP)ghTexture[3] = sfTexture_createFromFile("orange_ghost_up.png",NULL);
+            else if(gameState.ghosts[3].direction == DOWN)ghTexture[3] = sfTexture_createFromFile("orange_ghost_down.png",NULL);
+            else if(gameState.ghosts[3].direction == LEFT)ghTexture[3] = sfTexture_createFromFile("orange_ghost_left.png",NULL);
+            else if(gameState.ghosts[3].direction == RIGHT)ghTexture[3] = sfTexture_createFromFile("orange_ghost_right.png",NULL);
+            }
+        
+        }
+        else if(gameState.ghosts[i].state == FRIGHTENED){
+            ghTexture[i] = sfTexture_createFromFile("frightened_ghost.png",NULL);
+        }
+        else{
+            ghTexture[i] = sfTexture_createFromFile("return_ghost.png",NULL);
 
+        }
+    }
 
-    if(gameState.ghosts[3].direction == UP)ghTexture[3] = sfTexture_createFromFile("orange_ghost_up.png",NULL);
-    else if(gameState.ghosts[3].direction == DOWN)ghTexture[3] = sfTexture_createFromFile("orange_ghost_down.png",NULL);
-    else if(gameState.ghosts[3].direction == LEFT)ghTexture[3] = sfTexture_createFromFile("orange_ghost_left.png",NULL);
-    else if(gameState.ghosts[3].direction == RIGHT)ghTexture[3] = sfTexture_createFromFile("orange_ghost_right.png",NULL);
-
+   
+    
 
     
     for(int i=0;i<4;i++){
@@ -379,6 +429,7 @@ void renderGraphics(sfRenderWindow * window){
 
         sfRenderWindow_clear(window, sfBlack);
         sfRenderWindow_drawText(window,score,NULL);
+        sfRenderWindow_drawText(window,sc,NULL);
         sfRenderWindow_drawSprite(window, hsprite, NULL);
         sfRenderWindow_drawSprite(window, gridSprite, NULL);
         sfRenderWindow_drawSprite(window, pac, NULL);
@@ -388,27 +439,28 @@ void renderGraphics(sfRenderWindow * window){
             sfRenderWindow_drawSprite(window, ghostSpr[i], NULL);
         }
 
-        for(int i=0;i<ROWS;i++){
-            for(int j=0;j<COLS;j++){
-                if(grid[i][j] == '.'){
-    
-                    sfVector2f temp = {j * TILE_SIZE + 10,i* TILE_SIZE + 120};
+
+        for (int row = 0; row < ROWS; row++) {
+            for (int col = 0; col < COLS; col++) {
+                // Render small dots
+                if (dotMap[row][col]) {
+                    
+                    sfVector2f temp = {col * TILE_SIZE + 10,row* TILE_SIZE + 120};
                     sfVector2f scale3 = {1.5f,1.5f};
                     sfSprite_setScale(pelletSpr,scale3);
                     sfSprite_setPosition(pelletSpr,temp);
                     sfRenderWindow_drawSprite(window,pelletSpr,NULL);
-    
                 }
-                if(grid[i][j] == 'O'){
-                    sfVector2f temp = {j * TILE_SIZE + 10,i* TILE_SIZE + 90};
+    
+                // Render power pellets
+                if (powerPellet[row][col]) {
+                    sfVector2f temp = {col * TILE_SIZE + 10,row* TILE_SIZE + 120};
                     sfVector2f scale3 = {1.5f,1.5f};
                     sfSprite_setScale(bigpelletSpr,scale3);
                     sfSprite_setPosition(bigpelletSpr,temp);
                     sfRenderWindow_drawSprite(window,bigpelletSpr,NULL);
                 }
-    
             }
-    
         }
 
         //displayPellet(pelletSpr,window);
@@ -563,7 +615,7 @@ void initPacman(){
     for (int row = 0; row < ROWS; row++) {
         for (int col = 0; col < COLS; col++) {
             if (grid[row][col] == 'P') {
-                sfVector2f temp = {col * TILE_SIZE , row * TILE_SIZE + 120};
+                sfVector2f temp = {col * TILE_SIZE , row * TILE_SIZE + 100};
                 gameState.pacman.pos = temp;
                 gameState.pacman.direction = NONE;
                 break;
@@ -573,9 +625,53 @@ void initPacman(){
 
 }
 
-void movePacman(float pacmanSpeed,float deltaTime){
 
+//pacman eats simple pellet or dot
+void eating(){
+
+    int pacmanx = (int)gameState.pacman.pos.x / TILE_SIZE;
+    int pacmany = ((int)gameState.pacman.pos.y - 100) / TILE_SIZE;
+    //checking dot
+if (dotMap[pacmany][pacmanx]) {
+    dotMap[pacmany][pacmanx] = false;
+    gameState.score++;
+}
+//checking pellet
+if (powerPellet[pacmany][pacmanx]) {
+    powerPellet[pacmany][pacmanx]= false;
+    gameState.score += 5;
+
+    for(int i=0;i<4;i++){
+         gameState.ghosts[i].state = FRIGHTENED;
+         gameState.ghosts[i].frightenedTimer = 8.0f;
+    }
+}
+}
+
+void movePacman(float pacmanSpeed, float deltaTime, enum Direction prevDir) {
     float dx = 0, dy = 0;
+    int pacmanGridX = (int)(gameState.pacman.pos.x) / TILE_SIZE;
+    int pacmanGridY = ((int)(gameState.pacman.pos.y - 100)) / TILE_SIZE;
+
+    // Check for side walls when moving vertically
+    if (gameState.pacman.direction == UP || gameState.pacman.direction == DOWN) {
+        bool leftWall = (pacmanGridX - 1 >= 0 && grid[pacmanGridY][pacmanGridX - 1] == '#');
+        bool rightWall = (pacmanGridX + 1 < COLS && grid[pacmanGridY][pacmanGridX + 1] == '#');
+        
+        if (leftWall && rightWall) {
+            gameState.pacman.direction = prevDir;
+        }
+    }
+    else if (gameState.pacman.direction == LEFT || gameState.pacman.direction == RIGHT) {
+        bool topWall = (pacmanGridY - 1 >= 0 && grid[pacmanGridY - 1][pacmanGridX] == '#');
+        bool bottomWall = (pacmanGridY + 1 < ROWS && grid[pacmanGridY + 1][pacmanGridX] == '#');
+        
+        if (topWall && bottomWall) {
+            gameState.pacman.direction = prevDir;
+        }
+    }
+
+    // Apply Movement
     switch (gameState.pacman.direction) {
         case UP:    dy = -pacmanSpeed * deltaTime; break;
         case DOWN:  dy =  pacmanSpeed * deltaTime; break;
@@ -584,30 +680,44 @@ void movePacman(float pacmanSpeed,float deltaTime){
         default: break;
     }
 
-    static float mouthTimer = 0.0f;
-    const float mouthInterval = 0.25f;
-    mouthTimer += deltaTime;
-
-    if (mouthTimer >= mouthInterval) {
-        mouthTimer = 0.0f;
-        switch(gameState.pacman.mouth) {
-            case OPEN:      gameState.pacman.mouth = HALF_OPEN; break;
-            case HALF_OPEN: gameState.pacman.mouth = CLOSED;   break;
-            case CLOSED:    gameState.pacman.mouth = OPEN;     break;
-        }
-
-    }
-
+    // Position Update
     float newX = gameState.pacman.pos.x + dx;
     float newY = gameState.pacman.pos.y + dy;
     int gridX = (int)(newX) / TILE_SIZE;
-    int gridY = ((int)(newY - 120)) / TILE_SIZE;
+    int gridY = ((int)(newY - 100)) / TILE_SIZE;
 
     if (gridY >= 0 && gridY < ROWS && gridX >= 0 && gridX < COLS && grid[gridY][gridX] != '#') {
+
+        eating();
         gameState.pacman.pos.x = newX;
         gameState.pacman.pos.y = newY;
+        
+
+        for (int i = 0; i < 4; i++) {
+            Ghost* ghost = &gameState.ghosts[i];
+            float distance = sqrtf(powf(ghost->pos.x - gameState.pacman.pos.x, 2) + 
+                                   powf(ghost->pos.y - gameState.pacman.pos.y, 2));
+            if (distance < TILE_SIZE / 2) {
+                if (ghost->state == FRIGHTENED) {
+                    // Ghost eaten, switch to GOHOME state
+                    ghost->state = GOHOME;
+                    gameState.score += 200;
+                }
+            }
+        }
+    }
+
+    // Mouth Animation
+    static float mouthTimer = 0.0f;
+    const float mouthInterval = 0.25f;
+    mouthTimer += deltaTime;
+    if (mouthTimer >= mouthInterval) {
+        mouthTimer = 0.0f;
+        gameState.pacman.mouth = (gameState.pacman.mouth == OPEN) ? CLOSED : OPEN;
     }
 }
+
+
 
 
 void *gameEngineLoop(void *arg) {
@@ -626,7 +736,11 @@ void *gameEngineLoop(void *arg) {
     
 
     while (sfRenderWindow_isOpen(window)) {
+
+
+
         handleInput(window);
+
         handleUIState(window, font);  
 
         pthread_mutex_lock(&uiMutex);
@@ -643,7 +757,9 @@ void *gameEngineLoop(void *arg) {
 
         pthread_mutex_lock(&stateMutex);
 
-        movePacman(pacmanSpeed,deltaTime);
+        enum Direction prevDir = gameState.pacman.direction;
+
+        movePacman(pacmanSpeed,deltaTime,prevDir);
 
         renderGraphics(window);
         pthread_mutex_unlock(&stateMutex);
@@ -671,68 +787,6 @@ void *UIFunction(void *arg) {
 }
 
 
-/*
-void* GhostThread_func(void* arg) {
-    int ghostIndex = *(int*)arg;
-    Ghost* ghost = &gameState.ghosts[ghostIndex];
-    float speed = 75.0f; // pixels per second
-    sfClock* clock = sfClock_create();
-
-    while (1) {
-        float deltaTime = sfTime_asSeconds(sfClock_restart(clock));
-
-        // Step 1: Ensure ghost exits house only once
-        if (!ghost->hasExited) {
-            printf("Ghost %d: waiting for key...\n", ghostIndex);
-            sem_wait(&keySemaphore);
-            printf("Ghost %d: acquired key.\n", ghostIndex);
-        
-            printf("Ghost %d: waiting for exit permit...\n", ghostIndex);
-            sem_wait(&exitPermitSemaphore);
-            printf("Ghost %d: acquired exit permit.\n", ghostIndex);
-        
-            pthread_mutex_lock(&resourceMutex);
-            ghost->hasExited = 1;
-            ghost->pos.y -= TILE_SIZE * 2;
-            
-            printf("Ghost %d: exited ghost house at (%.1f, %.1f).\n", ghostIndex, ghost->pos.x, ghost->pos.y);
-            sem_post(&keySemaphore);          // release key
-            sem_post(&exitPermitSemaphore); 
-            pthread_mutex_unlock(&resourceMutex);
-        }
-        
-
-        if (ghost->hasExited) {
-            float dx = 0, dy = 0;
-            switch (ghost->direction) {
-                case UP: dy = -speed * deltaTime; break;
-                case DOWN: dy = speed * deltaTime; break;
-                case LEFT: dx = -speed * deltaTime; break;
-                case RIGHT: dx = speed * deltaTime; break;
-            }
-        
-            float newX = ghost->pos.x + dx;
-            float newY = ghost->pos.y + dy;
-        
-            int gridX = (int)(newX) / TILE_SIZE;
-            int gridY = ((int)(newY - 100)) / TILE_SIZE;
-        
-            if (gridY >= 0 && gridY < ROWS && gridX >= 0 && gridX < COLS && grid[gridY][gridX] != '#') {
-                ghost->pos.x = newX;
-                ghost->pos.y = newY;
-            } else {
-                ghost->direction = rand() % 4;
-            }
-        }
-
-        usleep(1000000 / 60); // ~60 FPS
-    }
-    printf("Ghost %d position: (%.2f, %.2f)\n", ghostIndex, ghost->pos.x, ghost->pos.y);
-
-    sfClock_destroy(clock);
-    return NULL;
-}
-*/
 // Direction offsets: UP, DOWN, LEFT, RIGHT
 static const int rowOffset[4] = { -1, 1,  0, 0 };
 static const int colOffset[4] = {  0, 0, -1, 1 };
@@ -758,75 +812,6 @@ Node findEntityInGrid(char target) {
     return (Node){-1, -1}; // Entity not found
 }
 
-//ghost death function
-// void ghostdeath(int i){
-
-//     if(gameState.ghosts[i].pos.x==gameState.pacman.pos.x && gameState.ghosts[i].pos.y==gameState.pacman.pos.y){
-//        if(i==0){
-//         gameState.ghosts[i].pos=pos1;
-//          die[i]=true;  
-//         }
-//         if(i==1){
-//             gameState.ghosts[i].pos=pos2; 
-//          die[i]=true;        
-//         }
-//        else if(i==2){
-//         gameState.ghosts[i].pos=pos3;
-//          die[i]=true;   
-//        }
-//        else if(i==3){
-//         gameState.ghosts[i].pos=pos4;
-//          die[i]=true;   
-//        }  
-//     }
-// }
-
-// //getting out of cage functions
-// void cagefree(int i){
-//     sem_wait(&mutex2); 
-//     sem_wait(&keySemaphore);
-//     sem_wait(&exitPermitSemaphore);
-//     printf("waiting for resources : %d",i);
-//     ghostkey[i] = true; 
-//     printf("Got resources : %d",i);
-//     sem_post(&mutex2); 
-    
-    
-//     if (die[i]) {
-//         sem_wait(&mutex2); 
-//         ghostkey[i] = false; 
-//         die[i]=false;
-//         sem_post(&mutex2); 
-//     }     
-// }
-// bool start=true;
-
-// //main thread functions
-// void* GhostThread4(void* arg) {
-//     int ghostIndex = *(int*)arg;
-//     Ghost* ghost = &gameState.ghosts[ghostIndex];
-//     sfClock* clock = sfClock_create();
-//     float speed = 75.0f;
-//         while (true) { 
-//         if(start){}
-//             if (die[3]) {
-//               ghostkey[3] = false; 
-//             }
-//             if(ghostkey[3]==false){
-//                cagefree(3);
-//                if(ghostkey[3]==true){
-//                 ghost->pos = (sfVector2f){13 * TILE_SIZE,11 * TILE_SIZE + 90};
-//                }
-//                }
-//             else{
-//                 GhostThreadFunction(3);
-//                 ghostdeath(0);
-//             }  
-    
-//         }
-//         pthread_exit(NULL); 
-//         return NULL;    
-// }    
 
 void* GhostThreadFunction(void* arg) {
     int ghostIndex = *(int*)arg;
@@ -844,13 +829,26 @@ void* GhostThreadFunction(void* arg) {
     while (1) {
         float deltaTime = sfTime_asSeconds(sfClock_restart(clock));
         
+        if(ghost->state == CHASE){
         // --- Ghost House Exit Logic ---
         if (!ghost->hasExited) {
-            pthread_mutex_lock(&stateMutex);
-            ghost->hasExited = true;
-            ghost->pos = (sfVector2f){13 * TILE_SIZE, 11 * TILE_SIZE + 90};
-            pthread_mutex_unlock(&stateMutex);
-            usleep(ghostIndex * 500000); // Stagger ghost exits
+            static const float exitDelay[] = {8.0f, 16.0f, 24.0f, 32.0f}; // Delay for each ghost
+            static float exitTimers[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+
+            exitTimers[ghostIndex] += deltaTime;
+
+            if (exitTimers[ghostIndex] >= exitDelay[ghostIndex]) {
+                sem_wait(&keySemaphore);
+                 sem_wait(&exitPermitSemaphore);
+                 pthread_mutex_lock(&stateMutex);
+
+                 ghost->hasExited = true;
+                 ghost->pos = (sfVector2f){13 * TILE_SIZE, 11 * TILE_SIZE + 90};
+
+                 pthread_mutex_unlock(&stateMutex);
+                 sem_post(&exitPermitSemaphore);
+                 sem_post(&keySemaphore);
+             }
             continue;
         }
 
@@ -869,7 +867,7 @@ void* GhostThreadFunction(void* arg) {
             };
             
             Node pacmanPos = {
-                (int)((gameState.pacman.pos.y - 120) / TILE_SIZE),
+                (int)((gameState.pacman.pos.y - 100) / TILE_SIZE),
                 (int)(gameState.pacman.pos.x / TILE_SIZE)
             };
             
@@ -1021,6 +1019,102 @@ void* GhostThreadFunction(void* arg) {
             }
         }
         
+        }
+        else if(ghost->state == FRIGHTENED){
+
+            ghost->frightenedTimer -= deltaTime;
+             if (ghost->frightenedTimer <= 0.0f) {
+                ghost->state = CHASE;
+                ghost->frightenedTimer = 0.0f;
+             }
+
+
+            if(!ghost->hasExited){
+                continue;
+            }
+
+            int ghostGridR = (int)((ghost->pos.y - 90) / TILE_SIZE);
+            int ghostGridC = (int)(ghost->pos.x / TILE_SIZE);
+            
+            // If the ghost is not moving in a valid direction, pick a new one
+            int nextR = ghostGridR + rowOffset[ghost->direction];
+            int nextC = ghostGridC + colOffset[ghost->direction];
+        
+            // Check if the current direction is still valid
+            if (nextR < 0 || nextR >= ROWS || nextC < 0 || nextC >= COLS || grid[nextR][nextC] == '#') {
+                // Pick a new random direction
+                enum Direction validDirs[4];
+                int validCount = 0;
+                
+                // Find all possible directions
+                for (int dirInt = UP; dirInt <= RIGHT; dirInt++) {
+                    int testR = ghostGridR + rowOffset[dirInt];
+                    int testC = ghostGridC + colOffset[dirInt];
+                    
+                    if (testR >= 0 && testR < ROWS && testC >= 0 && testC < COLS && 
+                        grid[testR][testC] != '#') {
+                        validDirs[validCount++] = (enum Direction)dirInt;
+                    }
+                }
+                
+                // Choose a random valid direction if available
+                if (validCount > 0) {
+                    ghost->direction = validDirs[rand() % validCount];
+                }
+            }
+            
+            // Move in the chosen direction
+            float dx = 0, dy = 0;
+            switch (ghost->direction) {
+                case UP:    dy = -speed * deltaTime; break;
+                case DOWN:  dy =  speed * deltaTime; break;
+                case LEFT:  dx = -speed * deltaTime; break;
+                case RIGHT: dx =  speed * deltaTime; break;
+            }
+            
+            float newX = ghost->pos.x + dx;
+            float newY = ghost->pos.y + dy;
+            
+            // Lock the ghost position update
+            pthread_mutex_lock(&stateMutex);
+            ghost->pos.x = newX;
+            ghost->pos.y = newY;
+            pthread_mutex_unlock(&stateMutex);
+            
+        }
+        else { //ghost->state == GOHOME
+            
+            Node homePos = findEntityInGrid('1' + ghostIndex);  // Get the ghost's home position
+            Node ghostPos = {
+                (int)((ghost->pos.y - 90) / TILE_SIZE),
+                (int)(ghost->pos.x / TILE_SIZE)
+            };
+        
+            // Calculate direction vector to home
+            float dx = homePos.c * TILE_SIZE - ghost->pos.x;
+            float dy = homePos.r * TILE_SIZE + 90 - ghost->pos.y;
+            
+            float distance = sqrtf(dx * dx + dy * dy);
+            float speedFactor = speed * deltaTime;
+        
+            // Normalize the direction vector
+            dx = (dx / distance) * speedFactor;
+            dy = (dy / distance) * speedFactor;
+        
+            pthread_mutex_lock(&stateMutex);
+            ghost->pos.x += dx;
+            ghost->pos.y += dy;
+        
+            // Check if the ghost has reached its home
+            float homeThreshold = 2.0f;  // Allow a small error margin
+            if (fabs(ghost->pos.x - homePos.c * TILE_SIZE) < homeThreshold &&
+                fabs(ghost->pos.y - (homePos.r * TILE_SIZE + 90)) < homeThreshold) {
+                ghost->state = CHASE;
+                ghost->hasExited = false;
+            }
+            pthread_mutex_unlock(&stateMutex);
+        }
+        
         usleep(1000000 / 60); // ~60 FPS
     }
     
@@ -1038,6 +1132,8 @@ void initializeGame(){
 
     pthread_mutex_init(&resourceMutex,NULL);
 
+    generateDotMap();
+    gameState.score = 0;
 
     //sample ghost
     for (int row = 0; row < ROWS; row++) {
@@ -1047,6 +1143,7 @@ void initializeGame(){
                 gameState.ghosts[0].pos = temp;
                 pos1=temp;
                 gameState.ghosts[0].direction = UP;
+                gameState.ghosts[0].state = CHASE;
                 gameState.ghosts[0].hasExited = false;
             }
             if (grid[row][col] == '2') {
@@ -1054,6 +1151,7 @@ void initializeGame(){
                 gameState.ghosts[1].pos = temp;
                 pos2=temp;
                 gameState.ghosts[1].direction = DOWN;
+                gameState.ghosts[1].state = CHASE;
                 gameState.ghosts[1].hasExited = false;
             }
             if (grid[row][col] == '3') {
@@ -1061,6 +1159,7 @@ void initializeGame(){
                 gameState.ghosts[2].pos = temp;
                 pos3=temp;
                 gameState.ghosts[2].direction = LEFT;
+                gameState.ghosts[2].state = CHASE;
                 gameState.ghosts[2].hasExited = false;
             }
             if (grid[row][col] == '4') {
@@ -1068,6 +1167,7 @@ void initializeGame(){
                 gameState.ghosts[3].pos = temp;
                 pos4=temp;
                 gameState.ghosts[3].direction = RIGHT;
+                gameState.ghosts[3].state = CHASE;
                 gameState.ghosts[3].hasExited = false;
             }
         }
