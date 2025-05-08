@@ -24,7 +24,7 @@ typedef struct {
     int r;
     int c;
 } Node;
-
+int hearts=3;
 int ghost1x = 12;
 int ghost2x = 16;
 int ghost3x = 12;
@@ -179,7 +179,104 @@ GameState gameState;
 
 pthread_mutex_t stateMutex = PTHREAD_MUTEX_INITIALIZER;
 
+void resetPositions();
 
+sfTexture * pacTexture;
+void checkCollisionWithGhosts() {
+    for (int i = 0; i < 4; i++) {
+        float distance = sqrtf(powf(gameState.ghosts[i].pos.x - gameState.pacman.pos.x, 2) + 
+                             powf(gameState.ghosts[i].pos.y - gameState.pacman.pos.y, 2));
+        
+        if (distance < TILE_SIZE/2) {  // Collision detected
+            if (gameState.ghosts[i].state == FRIGHTENED) {
+                // Ghost is vulnerable - eat it
+                gameState.score += 200;  // Bonus points
+                gameState.ghosts[i].state = GOHOME;
+            } else if (gameState.ghosts[i].state == CHASE) {
+                // Pac-Man gets hit
+                gameState.lives--;
+                if (gameState.lives <= 0) {
+                    uiState.currentState = STATE_GAME_OVER;
+                }
+                resetPositions();  
+            }
+        }
+    }
+    // for (int row = 0; row < ROWS; row++) {
+    //     for (int col = 0; col < COLS; col++) {
+    //         if (grid[row][col] == '1') {
+    //             sfVector2f temp = {col * TILE_SIZE,row * TILE_SIZE + 90};
+    //             gameState.ghosts[0].pos = temp;
+    //             //pos1=temp;
+    //             gameState.ghosts[0].direction = UP;
+    //             gameState.ghosts[0].state = CHASE;
+    //             gameState.ghosts[0].hasExited = false;
+    //         }
+    //         if (grid[row][col] == '2') {
+    //             sfVector2f temp = {col * TILE_SIZE,row * TILE_SIZE + 90};
+    //             gameState.ghosts[1].pos = temp;
+    //             //pos2=temp;
+    //             gameState.ghosts[1].direction = DOWN;
+    //             gameState.ghosts[1].state = CHASE;
+    //             gameState.ghosts[1].hasExited = false;
+    //         }
+    //         if (grid[row][col] == '3') {
+    //             sfVector2f temp = {col * TILE_SIZE,row * TILE_SIZE + 90};
+    //             gameState.ghosts[2].pos = temp;
+    //             //pos3=temp;
+    //             gameState.ghosts[2].direction = LEFT;
+    //             gameState.ghosts[2].state = CHASE;
+    //             gameState.ghosts[2].hasExited = false;
+    //         }
+    //         if (grid[row][col] == '4') {
+    //             sfVector2f temp = {col * TILE_SIZE,row * TILE_SIZE + 90};
+    //             gameState.ghosts[3].pos = temp;
+    //             //pos4=temp;
+    //             gameState.ghosts[3].direction = RIGHT;
+    //             gameState.ghosts[3].state = CHASE;
+    //             gameState.ghosts[3].hasExited = false;
+    //         }
+    //     }
+    // }
+}
+
+
+// Resets the pacman position after he loses a life
+void resetPositions() {
+    pthread_mutex_lock(&stateMutex);
+    
+    // Reset Pac-Man position
+    for (int row = 0; row < ROWS; row++) {
+        for (int col = 0; col < COLS; col++) {
+            if (grid[row][col] == 'P') {
+                gameState.pacman.pos = (sfVector2f){col * TILE_SIZE, row * TILE_SIZE + 100};
+                gameState.pacman.direction = NONE;
+                break;
+            }
+        }
+    }
+
+    // Reset ghosts
+    for (int i = 0; i < 4; i++) {
+        char target = '1' + i; // '1', '2', '3', or '4'
+        for (int row = 0; row < ROWS; row++) {
+            for (int col = 0; col < COLS; col++) {
+                if (grid[row][col] == target) {
+                    gameState.ghosts[i].pos = (sfVector2f){col * TILE_SIZE, row * TILE_SIZE + 90};
+                    gameState.ghosts[i].direction = (i == 0) ? UP : 
+                                                  (i == 1) ? DOWN : 
+                                                  (i == 2) ? LEFT : RIGHT;
+                    gameState.ghosts[i].state = CHASE;
+                    gameState.ghosts[i].hasExited = false;
+                    gameState.ghosts[i].frightenedTimer = 0.0f;
+                    break;
+                }
+            }
+        }
+    }
+
+    pthread_mutex_unlock(&stateMutex);
+}
 
 // Renders the Main Menu screen
 void renderMainMenu(sfRenderWindow *window, sfFont *font) {
@@ -310,6 +407,20 @@ void renderGraphics(sfRenderWindow * window){
     sfSprite_setScale(hsprite,hscale);
     sfSprite_setPosition(hsprite, hPosition);
     sfSprite_setTexture(hsprite, htexture, sfTrue);
+    sfTexture * htexture1 = sfTexture_createFromFile("heartt.png",NULL);
+    sfSprite * hsprite1 = sfSprite_create();
+    sfVector2f hPosition1 = {500.0f, 10.0f}; 
+    sfVector2f hscale1 = {3.0f,3.0f};
+    sfSprite_setScale(hsprite1,hscale1);
+    sfSprite_setPosition(hsprite1, hPosition1);
+    sfSprite_setTexture(hsprite1, htexture1, sfTrue);
+    sfTexture * htexture2 = sfTexture_createFromFile("heartt.png",NULL);
+    sfSprite * hsprite2 = sfSprite_create();
+    sfVector2f hPosition2 = {550.0f, 10.0f}; 
+    sfVector2f hscale2 = {3.0f,3.0f};
+    sfSprite_setScale(hsprite2,hscale2);
+    sfSprite_setPosition(hsprite2, hPosition2);
+    sfSprite_setTexture(hsprite2, htexture2, sfTrue);
 
     //grid
     sfTexture* texture = sfTexture_createFromFile("grid.png", NULL);
@@ -329,7 +440,7 @@ void renderGraphics(sfRenderWindow * window){
     
     sfSprite_setTexture(pac,pacTexture,sfTrue);
     sfSprite_setPosition(pac,gameState.pacman.pos);
-    sfSprite_setScale(pac,(sfVector2f){0.85f,0.85f});
+    sfSprite_setScale(pac,(sfVector2f){0.55f,0.55f});
     switch (gameState.pacman.direction) {
         case UP:
             sfSprite_setRotation(pac, 270.0f); // up is 270°
@@ -430,7 +541,15 @@ void renderGraphics(sfRenderWindow * window){
         sfRenderWindow_clear(window, sfBlack);
         sfRenderWindow_drawText(window,score,NULL);
         sfRenderWindow_drawText(window,sc,NULL);
+        if(gameState.lives > 2){
         sfRenderWindow_drawSprite(window, hsprite, NULL);
+        }
+        if(gameState.lives > 0){
+        sfRenderWindow_drawSprite(window, hsprite1, NULL);
+        }
+        if(gameState.lives > 1){
+        sfRenderWindow_drawSprite(window, hsprite2, NULL);
+        }
         sfRenderWindow_drawSprite(window, gridSprite, NULL);
         sfRenderWindow_drawSprite(window, pac, NULL);
 
@@ -551,22 +670,23 @@ void handleInput(sfRenderWindow *window) {
                 case STATE_RUNNING:
                     if (event.key.code == sfKeyEscape) {
                         uiState.currentState = STATE_PAUSED;
-                    } else if (event.key.code == sfKeyUp) {
-                        if (gameState.pacman.direction != DOWN) {
+                    } 
+                    else if (event.key.code == sfKeyUp) {
                             gameState.pacman.direction = UP;
-                        }
-                    } else if (event.key.code == sfKeyDown) {
-                        if (gameState.pacman.direction != UP) {
+                    } 
+                    else if (event.key.code == sfKeyDown) {
                             gameState.pacman.direction = DOWN;
-                        }
-                    } else if (event.key.code == sfKeyLeft) {
-                        if (gameState.pacman.direction != RIGHT) {
+                        
+                    } 
+                    else if (event.key.code == sfKeyLeft) {
+                      
                             gameState.pacman.direction = LEFT;
-                        }
-                    } else if (event.key.code == sfKeyRight) {
-                        if (gameState.pacman.direction != LEFT) {
+                        
+                    } 
+                    else if (event.key.code == sfKeyRight) {
+                      
                             gameState.pacman.direction = RIGHT;
-                        }
+                       
                     }
                     break;
 
@@ -615,7 +735,7 @@ void initPacman(){
     for (int row = 0; row < ROWS; row++) {
         for (int col = 0; col < COLS; col++) {
             if (grid[row][col] == 'P') {
-                sfVector2f temp = {col * TILE_SIZE , row * TILE_SIZE + 100};
+                sfVector2f temp = {col * TILE_SIZE , row * TILE_SIZE + 90};
                 gameState.pacman.pos = temp;
                 gameState.pacman.direction = NONE;
                 break;
@@ -627,32 +747,43 @@ void initPacman(){
 
 
 //pacman eats simple pellet or dot
-void eating(){
+void eating() {
 
-    int pacmanx = (int)gameState.pacman.pos.x / TILE_SIZE;
-    int pacmany = ((int)gameState.pacman.pos.y - 100) / TILE_SIZE;
-    //checking dot
-if (dotMap[pacmany][pacmanx]) {
-    dotMap[pacmany][pacmanx] = false;
-    gameState.score++;
-}
-//checking pellet
-if (powerPellet[pacmany][pacmanx]) {
-    powerPellet[pacmany][pacmanx]= false;
-    gameState.score += 5;
+    // Convert Pac-Man's pixel position to grid coordinates
+    int pacmanGridX = (int)(gameState.pacman.pos.x) / TILE_SIZE;
+    int pacmanGridY = ((int)(gameState.pacman.pos.y - 90)) / TILE_SIZE;
 
-    for(int i=0;i<4;i++){
-         gameState.ghosts[i].state = FRIGHTENED;
-         gameState.ghosts[i].frightenedTimer = 8.0f;
+    // Ensure we're within grid bounds
+    if (pacmanGridX < 0 || pacmanGridX >= COLS || pacmanGridY < 0 || pacmanGridY >= ROWS) {
+        return;
+    }
+
+    // Check for regular pellet
+    if (dotMap[pacmanGridY][pacmanGridX]) {
+        dotMap[pacmanGridY][pacmanGridX] = false;  // Remove the pellet
+        gameState.score += 10;  // Add 10 points
+        gameState.pelletsRemaining--;
+    }
+    // Check for power pellet
+    else if (powerPellet[pacmanGridY][pacmanGridX]) {
+        powerPellet[pacmanGridY][pacmanGridX] = false;  // Remove power pellet
+        gameState.score += 50;  // Add 50 points
+        gameState.pelletsRemaining--;
+
+        // Activate frightened mode for all ghosts
+        for (int i = 0; i < 4; i++) {
+            gameState.ghosts[i].state = FRIGHTENED;
+            gameState.ghosts[i].frightenedTimer = 6.0f;
+        }
     }
 }
-}
+
 
 void movePacman(float pacmanSpeed, float deltaTime, enum Direction prevDir) {
     float dx = 0, dy = 0;
     int pacmanGridX = (int)(gameState.pacman.pos.x) / TILE_SIZE;
-    int pacmanGridY = ((int)(gameState.pacman.pos.y - 100)) / TILE_SIZE;
-
+    int pacmanGridY = ((int)(gameState.pacman.pos.y - 90)) / TILE_SIZE;
+    
     // Check for side walls when moving vertically
     if (gameState.pacman.direction == UP || gameState.pacman.direction == DOWN) {
         bool leftWall = (pacmanGridX - 1 >= 0 && grid[pacmanGridY][pacmanGridX - 1] == '#');
@@ -684,11 +815,11 @@ void movePacman(float pacmanSpeed, float deltaTime, enum Direction prevDir) {
     float newX = gameState.pacman.pos.x + dx;
     float newY = gameState.pacman.pos.y + dy;
     int gridX = (int)(newX) / TILE_SIZE;
-    int gridY = ((int)(newY - 100)) / TILE_SIZE;
+    int gridY = ((int)(newY - 90)) / TILE_SIZE;
 
     if (gridY >= 0 && gridY < ROWS && gridX >= 0 && gridX < COLS && grid[gridY][gridX] != '#') {
 
-        eating();
+        
         gameState.pacman.pos.x = newX;
         gameState.pacman.pos.y = newY;
         
@@ -706,6 +837,10 @@ void movePacman(float pacmanSpeed, float deltaTime, enum Direction prevDir) {
             }
         }
     }
+    // check for pallet eating
+    eating();  
+
+    checkCollisionWithGhosts();
 
     // Mouth Animation
     static float mouthTimer = 0.0f;
@@ -734,9 +869,7 @@ void *gameEngineLoop(void *arg) {
     float pacmanSpeed = 100.0f;
 
     
-
     while (sfRenderWindow_isOpen(window)) {
-
 
 
         handleInput(window);
@@ -751,20 +884,17 @@ void *gameEngineLoop(void *arg) {
             continue;
         }
 
-
         sfTime elapsed = sfClock_restart(clock);
         float deltaTime = sfTime_asSeconds(elapsed);
-
+        
         pthread_mutex_lock(&stateMutex);
 
         enum Direction prevDir = gameState.pacman.direction;
-
         movePacman(pacmanSpeed,deltaTime,prevDir);
-
         renderGraphics(window);
         pthread_mutex_unlock(&stateMutex);
-
         usleep(1000000 / 60);  // ~60 FPS
+
     }
 
     sfClock_destroy(clock);
@@ -867,7 +997,7 @@ void* GhostThreadFunction(void* arg) {
             };
             
             Node pacmanPos = {
-                (int)((gameState.pacman.pos.y - 100) / TILE_SIZE),
+                (int)((gameState.pacman.pos.y - 90) / TILE_SIZE),
                 (int)(gameState.pacman.pos.x / TILE_SIZE)
             };
             
@@ -1134,6 +1264,7 @@ void initializeGame(){
 
     generateDotMap();
     gameState.score = 0;
+    gameState.lives = 3;
 
     //sample ghost
     for (int row = 0; row < ROWS; row++) {
@@ -1172,6 +1303,18 @@ void initializeGame(){
             }
         }
     }
+
+    // Count initial pellets
+    gameState.pelletsRemaining = 0;
+    for (int y = 0; y < ROWS; y++) {
+        for (int x = 0; x < COLS; x++) {
+            if (dotMap[y][x] || powerPellet[y][x]) {
+                gameState.pelletsRemaining++;
+            }
+        }
+    }
+    
+    gameState.score = 0;  // Reset score
 
     gameState.pacman.mouth = OPEN;
     uiState.currentState = STATE_MAIN_MENU;
