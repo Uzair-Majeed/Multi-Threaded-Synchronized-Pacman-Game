@@ -17,12 +17,14 @@
 #define TILE_SIZE 24
 #define ROWS 32
 #define COLS 29
-
 #define MAX_QUEUE  (ROWS * COLS) //for queue size in BFS algorithm
-bool dotMap[ROWS][COLS];
-bool powerPellet[ROWS][COLS];
-bool fruits[ROWS][COLS];
 
+
+bool dotMap[ROWS][COLS];    //bool arr for small pellets that we use
+bool powerPellet[ROWS][COLS];   //bool arr for bigger pellets
+bool fruits[ROWS][COLS];    //random fruits bool arr
+
+//Textures as global variables so that every func can use them and they are loaded only once and not every frame.
 sfFont * pacmanFont;
 sfFont * boldFont;
 sfTexture * pacTexture[5];
@@ -34,6 +36,7 @@ sfTexture * ghostTexture[18];
 sfTexture * fruitTexture[4];
 int fruitCount = 0;
 
+//Sound ptrs 
 sfSound * menuSound;
 sfSound * eatingSound;
 sfSound * pacDeathSound;
@@ -43,6 +46,7 @@ sfSound * ghostDeathSound;
 static const int rowOffset[4] = { -1, 1,  0, 0 };
 static const int colOffset[4] = {  0, 0, -1, 1 };
 
+//semaphores to be used to allow ghosts to leave house one after another synchronized.
 sem_t keySemaphore;
 sem_t exitPermitSemaphore;
 
@@ -95,6 +99,7 @@ enum Direction{
 
 };
 
+//this is optional,we dont use it anywhere tho
 enum GhostType
 {
 	RED,
@@ -103,13 +108,13 @@ enum GhostType
 	ORANGE,
 };
 
-
+//to show pac man's mouth moving , i use two states because i have two pngs and it kinda creates animation
 enum PacMouth{
     OPEN,
     CLOSED,
 };
 
-
+//ghost can be in one of 3 modes
 enum TargetState
 {
 	CHASE,
@@ -118,7 +123,7 @@ enum TargetState
 
 };
 
-
+//what UI interfaces is the game in
 enum UIStateType{
     STATE_START,
     STATE_MAIN_MENU,
@@ -129,6 +134,7 @@ enum UIStateType{
     STATE_INSTRUCTIONS
 };
 
+//play sound based on these types
 enum SoundStateType{
     MAIN_MENU,
     EATING_PELLETS,
@@ -143,13 +149,15 @@ typedef struct {
     int c;
 } Node;
 
+//at first i wanted to add name in highscores, but sfml for some reason cant take input name ,i tried experimenting,all in vain.
 typedef struct{
 
-    char name[5][50];
+    //char name[5][50];
     int topScores[5];
 
 }HighScores;
 
+//pacman struct
 typedef struct {
     int r,c;
     sfVector2f pos;
@@ -178,20 +186,21 @@ typedef struct {
 
 
 typedef struct {
-    char currPlayer[50];
     enum UIStateType currentState;
     bool quit;
     HighScores highScore;
     enum SoundStateType sound;
 } UIState;
 
-
+//two mutexes to allow synchronization
 pthread_mutex_t stateMutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t uiMutex = PTHREAD_MUTEX_INITIALIZER;
 
 GameState gameState;
 UIState uiState;
 
+//this reads highscores from file highScores.txt and stores the highscore in uistate.highscores.topScores[5]
+//at the start of the game
 void readHighScores(){
     int fd = open("highScores.txt", O_RDONLY);
 
@@ -212,49 +221,36 @@ void readHighScores(){
     close(fd);
 
     int start = 0;
-    int nameIndex = 0;
-    int score = 0;
-    bool flag = false;
+    int score[5] ={0};
+    int ind = 0;
+    char scoreArr[5];
 
-    HighScores temp;
 
     for (int i = 0; i < bytesRead; i++) {
         char c = buffer[i];
 
-        if (c == ',') {
-            temp.name[start][nameIndex] = '\0';
-            nameIndex = 0;
-            flag = true;
-            score = 0;
-        }
-        else if (c == '\n' || c == '\0') {
-            temp.topScores[start] = score;
-            start++;
-            flag = false;
+        if (ind >= 5) break;
 
-            // Stop if we filled 5 entries
-            if (start >= 5) break;
+        if(c == '\n' || c == '\0'){
+            scoreArr[start]='\0';
+            start = 0;
+            score[ind] = atoi(scoreArr);
+            ind++;
         }
-        else if (flag) {
-            score = score * 10 + (c - '0');
+        else{
+            scoreArr[start++] = c;
         }
-        else {
-            temp.name[start][nameIndex++] = c;
-        }
+
     }
 
     for (int i = 0; i < 5; i++) {
-        int j = 0;
-        while (temp.name[i][j] != '\0') {
-            uiState.highScore.name[i][j] = temp.name[i][j];
-            j++;
-        }
-        uiState.highScore.name[i][j] = '\0';
-        uiState.highScore.topScores[i] = temp.topScores[i];
+        uiState.highScore.topScores[i] = score[i];
     }
+
+
 }
 
-
+//this writes the highscores into the file.
 void writeHighScores(){
 
     int fd = open("highScores.txt", O_WRONLY | O_TRUNC | O_CREAT, 0644);
@@ -268,7 +264,7 @@ void writeHighScores(){
     int pos = 0;
 
     for (int i = 0; i < 5; i++) {
-        int len = sprintf(buffer + pos, "%s,%d\n", uiState.highScore.name[i], uiState.highScore.topScores[i]);
+        int len = sprintf(buffer + pos, "%d\n", uiState.highScore.topScores[i]);
         pos += len;
     }
 
@@ -282,21 +278,19 @@ void writeHighScores(){
     close(fd);
 }
 
+//sorting the highscore before writing so that the highscores come in descending order. We show top 5 highscores of all time.
 void sortHighScores(){
 
     HighScores* temp = &uiState.highScore;
     int sc = gameState.score;
 
-    if(sc < temp->topScores[4]){
+    if(sc <= temp->topScores[4]){
         return;
     }
     
     temp->topScores[4] = sc;
-    strncpy(temp->name[4], uiState.currPlayer, sizeof(temp->name[4]) - 1);
 
-    temp->name[4][sizeof(temp->name[4]) - 1] = '\0';
-
-    // Sort the scores and names (Bubble Sort)
+    // Sort the scores (Bubble Sort)
     for (int i = 0; i < 5; i++) {
         for (int j = 0; j < 4 - i; j++) {
             if (temp->topScores[j] < temp->topScores[j + 1]) {
@@ -305,70 +299,36 @@ void sortHighScores(){
                 temp->topScores[j] = temp->topScores[j + 1];
                 temp->topScores[j + 1] = tmpScore;
 
-                char tmpName[50];
-                strcpy(tmpName, temp->name[j]);
-                strcpy(temp->name[j], temp->name[j + 1]);
-                strcpy(temp->name[j + 1], tmpName);
             }
         }
     }
 
 
 }
-// Render the Main Menu screen with name input
+
+// Render the Starting welcome screen 
 void renderStartMenu(sfRenderWindow *window) {
 
 
-    static char playerName[50] = "";
-    static int playerNameLength = 0;
 
     sfText *title = sfText_create();
-    sfText_setString(title, "PAC-MAN \n\nEnter Your Name:");
+    sfText_setString(title, "WELCOME TO PAC-MAN \n\n\n");
     sfText_setFont(title, pacmanFont);
     sfText_setColor(title, sfYellow);
     sfText_setCharacterSize(title, 30);
     sfText_setPosition(title, (sfVector2f){100.f, 150.f});
     sfRenderWindow_drawText(window, title, NULL);
 
-    sfText *nameText = sfText_create();
-    sfText_setFont(nameText, boldFont);
-    sfText_setColor(nameText, sfWhite);
-    sfText_setCharacterSize(nameText, 30);
-    sfText_setPosition(nameText, (sfVector2f){100.f, 250.f});
-    sfText_setString(nameText, playerName);
-    sfRenderWindow_drawText(window, nameText, NULL);
-
     sfText *confirmText = sfText_create();
-    sfText_setString(confirmText, "Press SPACE to Confirm");
+    sfText_setString(confirmText, "Press Enter \n\t\tto Continue");
     sfText_setFont(confirmText, pacmanFont);
     sfText_setColor(confirmText, sfYellow);
     sfText_setCharacterSize(confirmText, 30);
     sfText_setPosition(confirmText, (sfVector2f){100.f, 450.f});
     sfRenderWindow_drawText(window, confirmText, NULL);
 
-    sfEvent event;
-    while (sfRenderWindow_pollEvent(window, &event)) {
-        if (event.type == sfEvtClosed) {
-            sfRenderWindow_close(window);
-        } 
-        else if (event.type == sfEvtTextEntered) {
-            if (event.text.unicode >= 32 && event.text.unicode <= 126) {
-                if (playerNameLength < sizeof(playerName) - 1) {
-                    playerName[playerNameLength++] = (char)event.text.unicode;
-                    playerName[playerNameLength] = '\0';
-                }
-            }
-            else if (event.text.unicode == 8 && playerNameLength > 0) {
-                playerName[--playerNameLength] = '\0';
-            }
-            else if (event.text.unicode == '\r' && playerNameLength > 0) {
-                strcpy(uiState.currPlayer, playerName);
-            }
-        }
-    }
 
     sfText_destroy(title);
-    sfText_destroy(nameText);
     sfText_destroy(confirmText);
 }
 
@@ -421,7 +381,7 @@ void renderHighScore(sfRenderWindow *window) {
     snprintf(buffer, sizeof(buffer), "HIGH SCORES:\n\n");
     for (int i = 0; i < 5; i++) {
         char line[64];
-        snprintf(line, sizeof(line), "%d. %s - %d\n\n", i + 1, uiState.highScore.name[i], uiState.highScore.topScores[i]);
+        snprintf(line, sizeof(line), "%d -- %d\n\n", i + 1, uiState.highScore.topScores[i]);
         strcat(buffer, line);
     }
 
@@ -463,7 +423,7 @@ void renderGameOver(sfRenderWindow *window) {
     snprintf(buffer, sizeof(buffer), "GAME OVER !! \n\nHIGH SCORES:\n\n");
     for (int i = 0; i < 5; i++) {
         char line[64];
-        snprintf(line, sizeof(line), "%d. %s - %d\n\n", i + 1, uiState.highScore.name[i], uiState.highScore.topScores[i]);
+        snprintf(line, sizeof(line), "%d -- %d\n\n", i + 1,uiState.highScore.topScores[i]);
         strcat(buffer, line);
     }
 
@@ -481,18 +441,16 @@ void renderGameOver(sfRenderWindow *window) {
     sfRenderWindow_drawText(window, scoreText, NULL);
     sfText_destroy(scoreText);
 
-    sortHighScores();
-    writeHighScores();
 }
 
 
 
-
+//this is the render mother function.Almost renders or call every thing
 void renderGraphics(sfRenderWindow * window){
 
 
 
-    //score
+    //rendering current score
     sfText* score = sfText_create();
     sfText_setFont(score,pacmanFont);
     sfText_setString(score, "SCORE : ");
@@ -502,7 +460,6 @@ void renderGraphics(sfRenderWindow * window){
     sfText_setPosition(score, textPosition);
     sfText_setColor(score,sfYellow);
 
-    //======
     sfText* sc = sfText_create();
     sfText_setFont(sc,boldFont);
     char str[12];
@@ -514,7 +471,9 @@ void renderGraphics(sfRenderWindow * window){
     sfText_setPosition(sc, textPosition2);
     sfText_setColor(sc,sfYellow);
 
-    //print heart
+
+    //==============================
+    //render hearts/lives
     sfSprite * hsprite = sfSprite_create();
     sfVector2f hPosition = {600.0f, 10.0f}; 
     sfVector2f hscale = {3.0f,3.0f};
@@ -536,7 +495,9 @@ void renderGraphics(sfRenderWindow * window){
     sfSprite_setPosition(hsprite2, hPosition2);
     sfSprite_setTexture(hsprite2, heartTexture, sfTrue);
 
-    //grid
+
+    //==============================
+    //render grids
     sfSprite* gridSprite = sfSprite_create();
     sfSprite_setTexture(gridSprite, gridTexture, sfTrue);
     sfVector2f scale = {3.00f, 3.02f};
@@ -544,7 +505,9 @@ void renderGraphics(sfRenderWindow * window){
     sfSprite_setScale(gridSprite,scale);
     sfSprite_setPosition(gridSprite, gridPosition);
 
-    //display pacman
+
+    //==============================
+    //render pacman
     sfSprite * pac = sfSprite_create();
 
     if(gameState.pacman.mouth == OPEN){
@@ -570,7 +533,8 @@ void renderGraphics(sfRenderWindow * window){
 
     
 
-    //ghosts
+    //==============================
+    //render ghosts
     sfSprite* ghostSpr[4];
 
     for(int i=0;i<4;i++)ghostSpr[i] = sfSprite_create();
@@ -628,7 +592,8 @@ void renderGraphics(sfRenderWindow * window){
     }
 
 
-    //pellets
+    //==============================
+    //render pellets
     sfSprite* pelletSpr = sfSprite_create();
     sfSprite_setTexture(pelletSpr,pelletTexture,sfTrue);
 
@@ -649,6 +614,7 @@ void renderGraphics(sfRenderWindow * window){
     sfSprite* strawberrySpr = sfSprite_create();
     sfSprite_setTexture(strawberrySpr,fruitTexture[3],sfTrue);
 
+    //==============================
     
     sfEvent event;
     
@@ -656,6 +622,8 @@ void renderGraphics(sfRenderWindow * window){
             if (event.type == sfEvtClosed)
                 sfRenderWindow_close(window);
     
+
+        //drawing sprites now on window screen
 
         sfRenderWindow_clear(window, sfBlack);
 
@@ -739,6 +707,7 @@ void renderGraphics(sfRenderWindow * window){
         sfRenderWindow_display(window);
     
 
+    //destroying sprites
     for(int i=0;i<4;i++){
         sfSprite_destroy(ghostSpr[i]);
     }
@@ -756,6 +725,7 @@ void renderGraphics(sfRenderWindow * window){
 
 }
 
+//this func basically does as the name suggests.just shifts control of UI state from one to another.
 void handleUIState(sfRenderWindow* window) {
     pthread_mutex_lock(&uiMutex);
 
@@ -822,6 +792,9 @@ void handleUIState(sfRenderWindow* window) {
     pthread_mutex_unlock(&uiMutex);
 }
 
+//This func is responsible for handling all input.
+//at first this func was to be called in ui thread func . but sfrenderwindow* ptr cannot be sent to multiple threads.
+//so we call it in game thread func
 void handleInput(sfRenderWindow *window) {
     sfEvent event;
     
@@ -832,7 +805,7 @@ void handleInput(sfRenderWindow *window) {
             switch (uiState.currentState) {
 
                 case STATE_START:
-                if (event.key.code == sfKeySpace) {
+                if (event.key.code == sfKeyEnter) {
                     uiState.currentState = STATE_MAIN_MENU;
                 }
 
@@ -916,9 +889,11 @@ void handleInput(sfRenderWindow *window) {
     }
 }
 
+//forward declared
 void initPacman();
 void initGhosts();
 
+//game won-- all pellets have been digested
 bool winCondition(){
     if(gameState.pelletsRemaining == 0){
         return true;
@@ -926,7 +901,7 @@ bool winCondition(){
     return false;
 }
 
-
+//all lives lost
 bool loseCondition(){
     if(gameState.lives <= 0){
         return true;
@@ -938,24 +913,25 @@ bool loseCondition(){
 void resetPositions() {
     
     initPacman();
-
-    // Reset ghosts
     initGhosts();
 
 }
 
 
+//so basically we use distance formula to calc distance between ghost and pacman.
+//if that distance is less than half of tilesize(its basically a single cell of grid),then collision will be detected
 void checkCollisionWithGhosts() {
 
     for (int i = 0; i < 4; i++) {
+
         float distance = sqrtf(powf(gameState.ghosts[i].pos.x - gameState.pacman.pos.x, 2) + 
                              powf(gameState.ghosts[i].pos.y - gameState.pacman.pos.y, 2));
         
-        if (distance < TILE_SIZE/2) {  // Collision detected
+        if (distance < TILE_SIZE/2) { 
             if (gameState.ghosts[i].state == FRIGHTENED) {
-                // Ghost is vulnerable - eat it
+
                 gameState.score += 200;  // Bonus points
-                gameState.ghosts[i].state = GOHOME;
+                gameState.ghosts[i].state = GOHOME; //ghosts will return to home
 
             } 
             else if (gameState.ghosts[i].state == CHASE && gameState.lives > 0) {
@@ -970,6 +946,8 @@ void checkCollisionWithGhosts() {
         }
     }
 }
+
+//random fruit generation logic
 void randomFruit(int x,int y){
     //1 25,5 1,26 24,29 6
 
@@ -992,44 +970,44 @@ void randomFruit(int x,int y){
     }
 }
 
-//pacman eats simple pellet or dot
+//pacman eats simple pellet or dot or a fruit
 void eating() {
 
     // Convert Pac-Man's pixel position to grid coordinates
     int pacmanGridX = (int)(gameState.pacman.pos.x) / TILE_SIZE;
     int pacmanGridY = ((int)(gameState.pacman.pos.y - 90)) / TILE_SIZE;
 
-    // Ensure we're within grid bounds
     if (pacmanGridX < 0 || pacmanGridX >= COLS || pacmanGridY < 0 || pacmanGridY >= ROWS) {
         return;
     }
 
-    // Check for regular pellet
+    // Check for small pellet 10 pts
     if (dotMap[pacmanGridY][pacmanGridX]) {
-        dotMap[pacmanGridY][pacmanGridX] = false;  // Remove the pellet
-        gameState.score += 10;  // Add 10 points
+        dotMap[pacmanGridY][pacmanGridX] = false;  
+        gameState.score += 10; 
         gameState.pelletsRemaining--;
     }
-    // Check for power pellet
+    // Check for power pellet 50 pts
     else if (powerPellet[pacmanGridY][pacmanGridX]) {
-        powerPellet[pacmanGridY][pacmanGridX] = false;  // Remove power pellet
-        gameState.score += 50;  // Add 50 points
+        powerPellet[pacmanGridY][pacmanGridX] = false; 
+        gameState.score += 50;  
         gameState.pelletsRemaining--;
 
         
 
         uiState.sound = GHOST_DEATH;
-        // Activate frightened mode for all ghosts
+
         for (int i = 0; i < 4; i++) {
-            gameState.ghosts[i].state = FRIGHTENED;
+            gameState.ghosts[i].state = FRIGHTENED;//ghosts go into frightened mode
             gameState.ghosts[i].frightenedTimer = 5.0f;
         }
 
         fruitCount++;
-        if(fruitCount == 4){
+        if(fruitCount == 4){    //if all big pellets are eaten only then i shall display fruit
             randomFruit(pacmanGridY,pacmanGridX);
         }
     }
+    //eating fruit gives 200 pts
     if(fruits[pacmanGridY][pacmanGridX]){
         gameState.score += 200; 
         fruits[pacmanGridY][pacmanGridX] = false;
@@ -1037,10 +1015,12 @@ void eating() {
 }
 
 
+//moving pacman logic
 void movePacman(float pacmanSpeed, float deltaTime, enum Direction prevDir) {
 
     uiState.sound = EATING_PELLETS;
     float dx = 0, dy = 0;
+
     //teleport logic
     if (gameState.pacman.pos.y > 14 * TILE_SIZE + 90 && gameState.pacman.pos.y < 15 * TILE_SIZE + 90) {
         if (gameState.pacman.pos.x <= 0 && gameState.pacman.direction == LEFT) {
@@ -1075,9 +1055,9 @@ void movePacman(float pacmanSpeed, float deltaTime, enum Direction prevDir) {
         gameState.pacman.pos.x = newX;
         gameState.pacman.pos.y = newY;
 
-        // check for pallet eating
     }
 
+        // check for pallet eating
     eating();  
 
     checkCollisionWithGhosts();
@@ -1093,8 +1073,8 @@ void movePacman(float pacmanSpeed, float deltaTime, enum Direction prevDir) {
 }
 
 
-
-
+//this is the game engine thread function.responsible for rendering graphics,moving pacman,calculating collisions etc.
+//pretty basic.
 void *gameEngineLoop(void *arg) {
 
 
@@ -1121,7 +1101,7 @@ void *gameEngineLoop(void *arg) {
 
         pthread_mutex_unlock(&uiMutex);
 
-        if(!flag){
+        if(!flag){//if game hasnt started dont display the map and related graphics
             continue;
         }
 
@@ -1131,10 +1111,15 @@ void *gameEngineLoop(void *arg) {
         pthread_mutex_lock(&stateMutex);
 
 
+        //gameover
         if(winCondition() || loseCondition()){
 
             pthread_mutex_lock(&uiMutex);
             uiState.currentState = STATE_GAME_OVER;
+
+            sortHighScores();
+            writeHighScores();
+
             pthread_mutex_unlock(&uiMutex);
 
             continue;
@@ -1155,6 +1140,9 @@ void *gameEngineLoop(void *arg) {
 }
 
 
+//so this is UI thread function. I was supposed to take input using this function. but SFML library doesnt allow us to
+//pass sfRenderWindow pointer to multiple threads so i can call sfRenderWIndow_pollEvent to take input in this func
+//however i do update sound logic in this.
 void *UIFunction(void *arg) {
 
     //sfRenderWindow* window = (sfRenderWindow*)arg;
@@ -1196,7 +1184,7 @@ void *UIFunction(void *arg) {
 }
 
 
-
+//finds target in grid and returns coordinates
 Node findEntityInGrid(char target) {
     for (int row = 0; row < ROWS; row++) {
         for (int col = 0; col < COLS; col++) {
@@ -1209,15 +1197,30 @@ Node findEntityInGrid(char target) {
 }
 
 
+/*this is the ghost thread function.
+each of four ghosts run this function separately
+
+-----chase mode--------
+this func includes bfs traversal to calculate shortest path to pacman
+each ghost calculates different path to pacman.
+red ghost goes BFS
+pink targets 4 tiles ahead of Pac-Man's direction
+cyan kinda follows hybrid tracking. 
+orange chases pacman until its close but then scatters.
+
+----frightened mode---------
+in frightened mode, ghosts move randomnly in any of the 4 directions
+
+----GO home mode-----------
+when ghosts get eaten, they move diagonally back to home.distance formula is used for that*/
 void* GhostThreadFunction(void* arg) {
     int ghostIndex = *(int*)arg;
     Ghost* ghost = &gameState.ghosts[ghostIndex];
     sfClock* clock = sfClock_create();
     float speed = 75.0f;
     
-    // For path recalculation throttling
     sfClock* pathClock = sfClock_create();
-    float pathUpdateInterval = 0.5f; // Update path twice per second
+    float pathUpdateInterval = 0.5f; 
     
     // Each ghost gets slightly different speed for variety
     speed += (ghostIndex * 5); 
@@ -1237,7 +1240,7 @@ void* GhostThreadFunction(void* arg) {
         if(ghost->state == CHASE){
         // --- Ghost House Exit Logic ---
         if (!ghost->hasExited) {
-            static const float exitDelay[] = {5.0f, 10.0f, 15.0f, 30.0f}; // Delay for each ghost
+            static const float exitDelay[] = {5.0f, 10.0f, 15.0f, 30.0f}; // Delay for each ghost exit
             static float exitTimers[4] = {0.0f, 0.0f, 0.0f, 0.0f};
 
             exitTimers[ghostIndex] += deltaTime;
@@ -1257,7 +1260,7 @@ void* GhostThreadFunction(void* arg) {
             continue;
         }
 
-        // --- Pathfinding Update (Throttled) ---
+        // --- Pathfinding ---
         bool shouldUpdatePath = sfTime_asSeconds(sfClock_getElapsedTime(pathClock)) > pathUpdateInterval;
         
         if (shouldUpdatePath) {
@@ -1265,7 +1268,7 @@ void* GhostThreadFunction(void* arg) {
             
             pthread_mutex_lock(&stateMutex);
             
-            // Get current positions in grid coordinates
+            // Get current positions
             Node ghostPos = {
                 (int)((ghost->pos.y - 90) / TILE_SIZE),
                 (int)(ghost->pos.x / TILE_SIZE)
@@ -1276,7 +1279,6 @@ void* GhostThreadFunction(void* arg) {
                 (int)(gameState.pacman.pos.x / TILE_SIZE)
             };
             
-            // Ghost-specific targeting (classic Pac-Man behavior)
             switch (ghostIndex) {
                 case 0: // Red - Direct chase
                     break;
@@ -1288,13 +1290,12 @@ void* GhostThreadFunction(void* arg) {
                         case RIGHT: pacmanPos.c += 4; break;
                     }
                     break;
-                case 2: // Cyan - Hybrid targeting
+                case 2: // Cyan - Hybrid following based on red's pos with pacman
                     {
                         Node redGhostPos = {
                             (int)((gameState.ghosts[0].pos.y - 90) / TILE_SIZE),
                             (int)(gameState.ghosts[0].pos.x / TILE_SIZE)
                         };
-                        // Vector from Red ghost to 2 tiles ahead of Pac-Man
                         pacmanPos.r = 2 * pacmanPos.r - redGhostPos.r;
                         pacmanPos.c = 2 * pacmanPos.c - redGhostPos.c;
                     }
@@ -1303,9 +1304,12 @@ void* GhostThreadFunction(void* arg) {
                     {
                         float dr = ghostPos.r - pacmanPos.r;
                         float dc = ghostPos.c - pacmanPos.c;
-                        float distance = sqrtf(dr*dr + dc*dc);  // More efficient than powf()
-                        if (distance < 8) { // If close to Pac-Man
-                            pacmanPos.r = 0;  // Target corner
+                        //using distance formula to get close,if close enough then scatters
+
+                        float distance = sqrtf(dr*dr + dc*dc);  
+
+                        if (distance < 8) { 
+                            pacmanPos.r = 0; 
                             pacmanPos.c = 0;
                         }
                     }
@@ -1332,11 +1336,10 @@ void* GhostThreadFunction(void* arg) {
             dist[ghostPos.r][ghostPos.c] = 0;
             queue[rear++] = ghostPos;
             
-            // --- BFS Execution ---
+            // --- BFS algorithm ---
             while (front < rear) {
                 Node current = queue[front++];
                 
-                // Early exit if we reach Pac-Man
                 if (current.r == pacmanPos.r && current.c == pacmanPos.c) break;
                 
                 // Explore neighbors
@@ -1344,13 +1347,12 @@ void* GhostThreadFunction(void* arg) {
                     int newR = current.r + rowOffset[i];
                     int newC = current.c + colOffset[i];
                     
-                    // Skip invalid or wall tiles
                     if (newR < 0 || newR >= ROWS || newC < 0 || newC >= COLS || 
                         grid[newR][newC] == '#') {
                         continue;
                     }
                     
-                    // Update if found shorter path
+                    // RELAXATION If shorter path found
                     if (dist[newR][newC] > dist[current.r][current.c] + 1) {
                         dist[newR][newC] = dist[current.r][current.c] + 1;
                         prev[newR][newC] = current;
@@ -1361,10 +1363,9 @@ void* GhostThreadFunction(void* arg) {
             
             // --- Determine Next Direction ---
             if (dist[pacmanPos.r][pacmanPos.c] < INT_MAX) {
-                // Backtrack to find first move
                 Node step = pacmanPos;
-                while (prev[step.r][step.c].r != ghostPos.r || 
-                       prev[step.r][step.c].c != ghostPos.c) {
+
+                while (prev[step.r][step.c].r != ghostPos.r || prev[step.r][step.c].c != ghostPos.c) {
                     step = prev[step.r][step.c];
                 }
                 
@@ -1378,6 +1379,7 @@ void* GhostThreadFunction(void* arg) {
             pthread_mutex_unlock(&stateMutex);
         }
         
+
         // --- Movement Execution ---
         float dx = 0, dy = 0;
         switch (ghost->direction) {
@@ -1390,23 +1392,23 @@ void* GhostThreadFunction(void* arg) {
         float newX = ghost->pos.x + dx;
         float newY = ghost->pos.y + dy;
         
-        // Convert new position to grid coordinates for collision check
         int newR = (int)((newY - 90) / TILE_SIZE);
         int newC = (int)(newX / TILE_SIZE);
         
         // Check if new position is valid
-        if (newR >= 0 && newR < ROWS && newC >= 0 && newC < COLS && 
-            grid[newR][newC] != '#') {
+        if (newR >= 0 && newR < ROWS && newC >= 0 && newC < COLS && grid[newR][newC] != '#') {
             pthread_mutex_lock(&stateMutex);
             ghost->pos.x = newX;
             ghost->pos.y = newY;
             pthread_mutex_unlock(&stateMutex);
-        } else {
-            // Hit a wall - try to find a new valid direction
+
+        } 
+        else {
             enum Direction validDirs[4];
             int validCount = 0;
             
-            // Check all possible directions
+            // if hit wall then random direction.
+
             for (int dirInt = UP; dirInt <= RIGHT; dirInt++) {
                 enum Direction dir = (enum Direction)dirInt;
                 int testR = (int)((ghost->pos.y - 90) / TILE_SIZE) + rowOffset[dir];
@@ -1418,16 +1420,16 @@ void* GhostThreadFunction(void* arg) {
                 }
             }
             
-            // Choose random valid direction if stuck
             if (validCount > 0) {
                 ghost->direction = validDirs[rand() % validCount];
             }
         }
         
         }
-        else if(ghost->state == FRIGHTENED){
+        else if(ghost->state == FRIGHTENED){//FGHOSTS ARE IN RIGHTENED MODE
 
-            ghost->frightenedTimer -= deltaTime;
+
+            ghost->frightenedTimer -= deltaTime; //it take 5 sec to cooldown frightened state
              if (ghost->frightenedTimer <= 0.0f) {
                 ghost->state = CHASE;
                 ghost->frightenedTimer = 0.0f;
@@ -1441,17 +1443,16 @@ void* GhostThreadFunction(void* arg) {
             int ghostGridR = (int)((ghost->pos.y - 90) / TILE_SIZE);
             int ghostGridC = (int)(ghost->pos.x / TILE_SIZE);
             
-            // If the ghost is not moving in a valid direction, pick a new one
             int nextR = ghostGridR + rowOffset[ghost->direction];
             int nextC = ghostGridC + colOffset[ghost->direction];
         
-            // Check if the current direction is still valid
+            //  direction is valid check
             if (nextR < 0 || nextR >= ROWS || nextC < 0 || nextC >= COLS || grid[nextR][nextC] == '#') {
-                // Pick a new random direction
+
                 enum Direction validDirs[4];
                 int validCount = 0;
                 
-                // Find all possible directions
+                // GHOSTS MOVE RANDOMNLY WHEN IN FRIGHTENED MODE
                 for (int dirInt = UP; dirInt <= RIGHT; dirInt++) {
                     int testR = ghostGridR + rowOffset[dirInt];
                     int testC = ghostGridC + colOffset[dirInt];
@@ -1462,13 +1463,11 @@ void* GhostThreadFunction(void* arg) {
                     }
                 }
                 
-                // Choose a random valid direction if available
                 if (validCount > 0) {
                     ghost->direction = validDirs[rand() % validCount];
                 }
             }
             
-            // Move in the chosen direction
             float dx = 0, dy = 0;
             switch (ghost->direction) {
                 case UP:    dy = -speed * deltaTime; break;
@@ -1480,7 +1479,6 @@ void* GhostThreadFunction(void* arg) {
             float newX = ghost->pos.x + dx;
             float newY = ghost->pos.y + dy;
             
-            // Lock the ghost position update
             pthread_mutex_lock(&stateMutex);
             ghost->pos.x = newX;
             ghost->pos.y = newY;
@@ -1495,10 +1493,10 @@ void* GhostThreadFunction(void* arg) {
                 (int)(ghost->pos.x / TILE_SIZE)
             };
         
-            // Calculate direction vector to home
             float dx = homePos.c * TILE_SIZE - ghost->pos.x;
             float dy = homePos.r * TILE_SIZE + 90 - ghost->pos.y;
             
+            //using distance formula
             float distance = sqrtf(dx * dx + dy * dy);
             float speedFactor = speed * deltaTime;
         
@@ -1511,7 +1509,7 @@ void* GhostThreadFunction(void* arg) {
             ghost->pos.y += dy;
         
             // Check if the ghost has reached its home
-            float homeThreshold = 2.0f;  // Allow a small error margin
+            float homeThreshold = 2.0f; 
             if (fabs(ghost->pos.x - homePos.c * TILE_SIZE) < homeThreshold &&
                 fabs(ghost->pos.y - (homePos.r * TILE_SIZE + 90)) < homeThreshold) {
                 ghost->state = CHASE;
@@ -1530,6 +1528,8 @@ void* GhostThreadFunction(void* arg) {
     return NULL;
 }
 
+
+//INITIALIZATION FUNCTIONS:
 void initFonts(){
 
 
@@ -1747,11 +1747,10 @@ int main() {
 
     
     pthread_create(&UIThread, NULL, UIFunction,NULL);
-    srand(time(NULL)); // Seed RNG
+    srand(time(NULL)); 
 
     int ghostIndices[4] = {0, 1, 2, 3};
 
-     //pthread_create(&GhostThread[3], NULL, GhostThread4, &ghostIndices[3]);
     for (int i=0;i<4;i++){
         pthread_create(&GhostThread[i], NULL,GhostThreadFunction, &ghostIndices[i]);
 
